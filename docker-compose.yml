@@ -1,8 +1,9 @@
 services:
   # ============================================================
-  # PROXY — SOCKS5 via ProxyRise (auto-best region = most traffic)
-  #   Single upstream: 1 credential = 1 session (reliable)
-  #   Sysctls expanded for high concurrent connections
+  # PROXY — rotates res-any (auto best region) via ProxyRise
+  #   8 containers through same proxy but fast IP rotation
+  #   res-any picks best traffic region automatically
+  #   30s tunnel lifetime = fresh IP every 30s per device
   # ============================================================
   rotate-proxy:
     image: honeygain-rotate-proxy:latest
@@ -22,21 +23,16 @@ services:
     environment:
       - UPSTREAM_PROXY_URL=socks5://res-any:pgw-435fb460e7faae45f5989dcd48cf235ca35897c3e51788a1@gw.proxyrise.com:443
       - LISTEN_ADDR=0.0.0.0:8080
-      - TUNNEL_MAX_LIFETIME_SECS=600
-    healthcheck:
-      test: ["CMD-SHELL", "echo | cat /proc/net/tcp 2>/dev/null | head -3; true"]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
+      - TUNNEL_MAX_LIFETIME_SECS=30
+      - UPSTREAM_IPS_EXCLUDE=172.65.141.106
     networks:
       - honeygain-net
 
   # ============================================================
-  # HONEYGAIN — 2 IP groups (your internet + ProxyRise best region)
-  #   HOME (India):         honeygain-2  (host mode — your internet)
-  #   PROXY (best region):  honeygain-3..9 (7x — res-any auto region)
-  #   0 resource limits
+  # HONEYGAIN — 2 IP groups, 0 limits
+  #   HOME IP (Indonesia/India):  honeygain-2          (host mode)
+  #   PROXY (res-any best region): honeygain-3,4,5,6,7,8,9  (7x)
+  #   Total: 8 containers, 2 distinct exit-IP networks
   # ============================================================
 
   honeygain-defaults: &honeygain-env
@@ -46,7 +42,7 @@ services:
       - HONEYGAIN_EMAIL=unknown.zuv05082000@gmail.com
       - HONEYGAIN_PASS=Moin@4455
 
-  # --- GROUP A: HOME IP (your internet — India) ---
+  # --- HOME IP (your internet) ---
   honeygain-2:
     <<: *honeygain-env
     container_name: honeygain-2
@@ -57,7 +53,6 @@ services:
       - -device=Pixel-9-Pro-2025-B
       - -tou-accept
 
-  # --- GROUP B: PROXY (ProxyRise best region) ---
   honeygain-3: &proxy-group
     <<: *honeygain-env
     container_name: honeygain-3
