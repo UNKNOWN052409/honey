@@ -146,10 +146,12 @@ async fn socks5_connect(
     target_port: u16,
 ) -> Result<TcpStream, String> {
     let addr = format!("{}:{}", upstream.host, upstream.port);
-    let mut stream = tokio::time::timeout(Duration::from_secs(15), TcpStream::connect(&addr))
+    let raw = tokio::time::timeout(Duration::from_secs(15), TcpStream::connect(&addr))
         .await
         .map_err(|_| format!("connect timeout to {}", addr))?
         .map_err(|e| format!("connect to {}: {}", addr, e))?;
+
+    let mut stream = raw;
 
     // 1. Auth method negotiation
     let has_auth = !upstream.socks5_user.is_empty();

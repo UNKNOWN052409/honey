@@ -10,7 +10,7 @@ RUN cargo build --release && \
 
 # Minimal runtime with iptables
 FROM debian:bookworm-slim
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends iptables ca-certificates procps && \
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends iptables ca-certificates procps socat openssl && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/bin/rotate-proxy /usr/local/bin/rotate-proxy
 COPY entrypoint.sh /entrypoint.sh

@@ -1,38 +1,8 @@
 services:
   # ============================================================
-  # PROXY — rotates res-any (auto best region) via ProxyRise
-  #   8 containers through same proxy but fast IP rotation
-  #   res-any picks best traffic region automatically
-  #   30s tunnel lifetime = fresh IP every 30s per device
-  # ============================================================
-  rotate-proxy:
-    image: honeygain-rotate-proxy:latest
-    container_name: rotate-proxy
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
-    sysctls:
-      - net.ipv4.ip_local_port_range=10000 65535
-      - net.ipv4.tcp_fin_timeout=10
-    environment:
-      - UPSTREAM_PROXY_URL=socks5://res-any:pgw-435fb460e7faae45f5989dcd48cf235ca35897c3e51788a1@gw.proxyrise.com:443
-      - LISTEN_ADDR=0.0.0.0:8080
-      - TUNNEL_MAX_LIFETIME_SECS=30
-      - UPSTREAM_IPS_EXCLUDE=172.65.141.106
-    networks:
-      - honeygain-net
-
-  # ============================================================
-  # HONEYGAIN — 2 IP groups, 0 limits
-  #   HOME IP (Indonesia/India):  honeygain-2          (host mode)
-  #   PROXY (res-any best region): honeygain-3,4,5,6,7,8,9  (7x)
-  #   Total: 8 containers, 2 distinct exit-IP networks
+  # HONEYGAIN — direct mode (your internet IP)
+  #   ProxyRise credential is temporarily rate-limited
+  #   Will re-enable proxy once credential recovers
   # ============================================================
 
   honeygain-defaults: &honeygain-env
@@ -41,25 +11,20 @@ services:
     environment:
       - HONEYGAIN_EMAIL=unknown.zuv05082000@gmail.com
       - HONEYGAIN_PASS=Moin@4455
+    network_mode: "host"
 
-  # --- HOME IP (your internet) ---
   honeygain-2:
     <<: *honeygain-env
     container_name: honeygain-2
-    network_mode: "host"
     command:
       - -email=unknown.zuv05082000@gmail.com
       - -pass=Moin@4455
       - -device=Pixel-9-Pro-2025-B
       - -tou-accept
 
-  honeygain-3: &proxy-group
+  honeygain-3:
     <<: *honeygain-env
     container_name: honeygain-3
-    depends_on:
-      rotate-proxy:
-        condition: service_started
-    network_mode: "service:rotate-proxy"
     command:
       - -email=unknown.zuv05082000@gmail.com
       - -pass=Moin@4455
@@ -67,7 +32,7 @@ services:
       - -tou-accept
 
   honeygain-4:
-    <<: *proxy-group
+    <<: *honeygain-env
     container_name: honeygain-4
     command:
       - -email=unknown.zuv05082000@gmail.com
@@ -76,7 +41,7 @@ services:
       - -tou-accept
 
   honeygain-5:
-    <<: *proxy-group
+    <<: *honeygain-env
     container_name: honeygain-5
     command:
       - -email=unknown.zuv05082000@gmail.com
@@ -85,7 +50,7 @@ services:
       - -tou-accept
 
   honeygain-6:
-    <<: *proxy-group
+    <<: *honeygain-env
     container_name: honeygain-6
     command:
       - -email=unknown.zuv05082000@gmail.com
@@ -94,7 +59,7 @@ services:
       - -tou-accept
 
   honeygain-7:
-    <<: *proxy-group
+    <<: *honeygain-env
     container_name: honeygain-7
     command:
       - -email=unknown.zuv05082000@gmail.com
@@ -103,27 +68,10 @@ services:
       - -tou-accept
 
   honeygain-8:
-    <<: *proxy-group
+    <<: *honeygain-env
     container_name: honeygain-8
     command:
       - -email=unknown.zuv05082000@gmail.com
       - -pass=Moin@4455
       - -device=Pixel-9-Pro-2025-H
       - -tou-accept
-
-  honeygain-9:
-    <<: *proxy-group
-    container_name: honeygain-9
-    command:
-      - -email=unknown.zuv05082000@gmail.com
-      - -pass=Moin@4455
-      - -device=Pixel-9-Pro-2025-I
-      - -tou-accept
-
-networks:
-  honeygain-net:
-    name: honeygain-net
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16

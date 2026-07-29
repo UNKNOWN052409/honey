@@ -2,6 +2,21 @@
 # entrypoint.sh — Setup iptables transparent proxy, then run the Rust proxy
 # Dynamically extracts all upstream proxy IPs from env var to avoid loops
 
+# Start socat TLS unwrapper BEFORE iptables so it's not caught by OUTPUT redirect
+UPSTREAM_TLS_HOST="gw.proxyrise.com"
+UPSTREAM_TLS_PORT="443"
+echo "[INIT] Starting socat TLS unwrapper for ProxyRise (pre-iptables)..."
+socat TCP-LISTEN:4443,bind=127.0.0.1,fork,reuseaddr OPENSSL:$UPSTREAM_TLS_HOST:$UPSTREAM_TLS_PORT,verify=0 &
+SOCAT_PID=$!
+sleep 2
+
+# Verify socat is listening
+if cat /proc/net/tcp 2>/dev/null | grep -q "75FF"; then
+    echo "[INIT] ✅ socat TLS unwrapper listening on 127.0.0.1:4443"
+else
+    echo "[INIT] ⚠ socat might not be listening yet"
+fi
+
 echo "[INIT] Setting up iptables transparent proxy rules..."
 
 # Clean up any existing rules
@@ -81,6 +96,16 @@ echo "[INIT] Expanded ephemeral port range to 10000-65535, TCP FIN timeout 10s"
 
 echo "[INIT] iptables rules installed:"
 iptables -t nat -L REDSOCKS -v -n 2>&1
+
+echo "[INIT] Starting socat TLS unwrapper for ProxyRise..."
+# socat listens on 127.0.0.1:4443, wraps TLS to gw.proxyrise.com:443
+# Then Rust proxy can connect raw SOCKS5 to localhost:4443
+# UPSTREAM_PROXY_URL is like: socks5://user:pass@127.0.0.1:4443
+# Extract the REAL ProxyRise hostname from the URL before we replaced it!
+# We need gw.proxyrise.com:443 explicitly here
+UPSTREAM_TLS_HOST="gw.proxyrise.com"
+UPSTREAM_TLS_PORT="443"
+echo "[INIT] socat TLS unwrapper already started pre-iptables (PID $SOCAT_PID)"
 
 echo "[INIT] Starting rotate-proxy..."
 exec /usr/local/bin/rotate-proxy
