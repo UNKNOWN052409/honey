@@ -112,8 +112,13 @@ struct Config {
     /// Max consecutive errors before instance marked dead
     #[serde(default = "default_max_errors")]
     max_consecutive_errors: u32,
+
+    /// Verify egress IP via ipquery.io on startup
+    #[serde(default = "default_verify_ip")]
+    verify_ip: bool,
 }
 
+fn default_verify_ip() -> bool { true }
 fn default_tunnel_lifetime() -> u64 { 86400 } // 24h — sticky session no rotation
 fn default_proxy_base_port() -> u16 { 9150 }
 fn default_health_port() -> u16 { 8080 }
@@ -145,6 +150,7 @@ fn load_config() -> Result<Config> {
         proxy_max_retries: default_proxy_max_retries(),
         overuse_cooldown_secs: default_overuse_cooldown(),
         max_consecutive_errors: default_max_errors(),
+        verify_ip: default_verify_ip(),
     };
 
     for path in &config_paths {
@@ -178,6 +184,9 @@ fn load_config() -> Result<Config> {
     if let Ok(v) = env::var("HG_LIB_DIR") { config.lib_dir = Some(PathBuf::from(v)); }
     if let Ok(v) = env::var("OVERUSE_COOLDOWN_SECS") {
         config.overuse_cooldown_secs = v.parse().unwrap_or(300);
+    }
+    if let Ok(v) = env::var("VERIFY_IP") {
+        config.verify_ip = v == "true" || v == "1";
     }
 
     if config.device_pool.is_empty() {
@@ -959,24 +968,26 @@ async fn manage_instance(
             app_state.session_mgr.build_upstream(&session)
         };
 
-        // Verify IP before spawning honeygain
-        let verified_ip = verify_egress_ip(&upstream).await;
-        if let Some(ref ip) = verified_ip {
-            info!(
-                instance = instance_id,
-                ip = %ip,
-                username = %upstream.username,
-                "verified egress IP"
-            );
-            {
-                let mut info = app_state.instances[instance_id as usize - 1].lock().await;
-                info.verified_ip = verified_ip;
+        // Verify IP before spawning honeygain (optional)
+        if app_state.config.verify_ip {
+            let verified_ip = verify_egress_ip(&upstream).await;
+            if let Some(ref ip) = verified_ip {
+                info!(
+                    instance = instance_id,
+                    ip = %ip,
+                    username = %upstream.username,
+                    "verified egress IP"
+                );
+                {
+                    let mut info = app_state.instances[instance_id as usize - 1].lock().await;
+                    info.verified_ip = verified_ip;
+                }
+            } else {
+                warn!(
+                    instance = instance_id,
+                    "could not verify egress IP (ipquery.io failed or timeout)"
+                );
             }
-        } else {
-            warn!(
-                instance = instance_id,
-                "could not verify egress IP (ipquery.io failed or timeout)"
-            );
         }
 
         // Check overuse cooldown

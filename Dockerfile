@@ -1,4 +1,4 @@
-# Multi-stage build for hg-supervisor v2.0
+# Multi-stage build for hg-supervisor v3.0 — Sticky Session Edition
 # Stage 1: Build the Rust supervisor
 FROM rust:1.81-slim-bookworm AS builder
 

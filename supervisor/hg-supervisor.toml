@@ -1,36 +1,37 @@
-# hg-supervisor v2.0 configuration
-# For Render deployment — use env vars instead for credentials
+# hg-supervisor v3.0 configuration
+# Sticky Session Mode — 1 Instance = 1 Static IP
+# For Render deployment — use env vars for credentials
 
-instances = 50
+instances = 10
 email = "your_email@example.com"
 pass = "your_password"
-device_prefix = "HG"
 
-# Multi-proxy pool (comma-separated in env var: HG_PROXY_POOL)
-# At least 3-5 different proxy IPs needed to avoid overuse
-proxy_pool = [
-    "http://res-any:token1@gw.proxyrise.com:443",
-    "http://res-us:token2@gw.proxyrise.com:443",
-    "http://res-eu:token3@gw.proxyrise.com:443",
-    "http://res-asia:token4@gw.proxyrise.com:443",
-    "http://res-any:token5@gw.proxyrise.com:443",
-]
+# ── ProxyRise Sticky Session Config ──
+# Each instance gets a unique res-{country}-sid-{N} sticky session
+# 40 different countries for maximum IP diversity
+proxyrise_endpoint = "gw.proxyrise.com:443"
+proxyrise_api_key = "pgw-your-api-key-here"
+proxy_type = "res"          # res, stc, mob, dc
 
-# Tunnel rotation (seconds)
-tunnel_lifetime_secs = 300
+# ── IP Verification ──
+# Calls ipquery.io through each instance's proxy to verify egress IP
+verify_ip = true
 
-# Ports
+# ── Overuse Handling ──
+# When "Network Overused" detected, rotate to new sticky session (new IP)
+overuse_cooldown_secs = 300
+
+# ── Instance Resources ──
+# 0.1 core / 512MB supports ~10-15 instances
+# Each honeygain subprocess uses ~30-50MB RAM
 proxy_base_port = 9150
 health_port = 8080
 
-# Proxy failure handling
+# ── Proxy Failure Handling ──
+# Exponential backoff on 429/502/503/504 (250ms → 500ms → 1s → ... 8s)
 proxy_max_retries = 3
 proxy_retry_delay_secs = 60
-proxy_health_interval_secs = 30
 
-# Cooldown after "Network Overused"
-overuse_cooldown_secs = 300
-
-# Paths (adjust for local dev)
+# ── Paths (adjust for local dev) ──
 honeygain_bin = "./honeygain"
 lib_dir = "./libs"

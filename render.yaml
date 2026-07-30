@@ -1,5 +1,6 @@
-# Render Blueprint for hg-supervisor v2.0
-# Deploy up to 50 honeygain instances across proxy pool
+# Render Blueprint for hg-supervisor v3.0
+# Sticky Session Mode — 1 Instance = 1 Static IP
+# 100% IP isolation via ProxyRise sticky sessions (res-{country}-sid-{N})
 
 services:
   - type: web
@@ -11,18 +12,24 @@ services:
     healthCheckPath: /health
     envVars:
       - key: HG_INSTANCES
-        value: "50"
+        value: "10"              # Start small, scale up to 50
       - key: HG_EMAIL
-        sync: false
+        sync: false               # Render secret
       - key: HG_PASS
-        sync: false
-      - key: HG_PROXY_POOL
-        value: "http://res-any:token1@gw.proxyrise.com:443,http://res-us:token2@gw.proxyrise.com:443,http://res-eu:token3@gw.proxyrise.com:443"
-      - key: TUNNEL_MAX_LIFETIME_SECS
-        value: "300"
-      - key: PROXY_MAX_RETRIES
-        value: "3"
+        sync: false               # Render secret
+      # ── ProxyRise Sticky Session Config ──
+      - key: PROXYRISE_ENDPOINT
+        value: "gw.proxyrise.com:443"
+      - key: PROXYRISE_API_KEY
+        sync: false               # Render secret (pgw-...)
+      - key: PROXY_TYPE
+        value: "res"              # res, stc, mob, dc
+      # ── IP Verification ──
+      - key: VERIFY_IP
+        value: "true"             # Verify egress IP on startup
+      # ── Overuse Handling ──
       - key: OVERUSE_COOLDOWN_SECS
-        value: "300"
+        value: "300"              # 5 min cooldown after overuse
+      # ── Logging ──
       - key: RUST_LOG
         value: "info"

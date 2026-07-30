@@ -1,8 +1,8 @@
-# 🍯 Honeygain Supervisor — Docker-Free Multi-Instance Manager
+# 🍯 Honeygain Supervisor — v3.0 Sticky Session Edition
 
-> **Run 50+ honeygain instances on Render without Docker.**  
-> Single 4.2MB Rust binary replaces the entire Docker Compose + iptables stack.  
-> Android device spoofing, multi-proxy pool, auto-healing monitoring.
+> **Run 50+ honeygain instances on Render with 100% IP isolation.**
+> Every instance gets a UNIQUE static IP via ProxyRise sticky sessions.
+> 1 container = 1 IP. No sharing. Static until "Network Overused".
 
 [![Rust](https://img.shields.io/badge/Rust-1.97%2B-orange)](https://rustup.rs/)
 [![Render](https://img.shields.io/badge/Render-deploy-blue)](https://render.com)
@@ -14,15 +14,16 @@
 
 - [Why This Exists](#why-this-exists)
 - [Architecture](#architecture)
-  - [New: hg-supervisor (Recommended)](#new-hg-supervisor-recommended)
+  - [v3.0: Sticky Session Model (Recommended)](#v30-sticky-session-model-recommended)
   - [Old: Docker Compose (Legacy)](#old-docker-compose-legacy)
 - [Features](#features)
 - [Quick Start](#quick-start)
   - [Option A: Local Dev (No Docker)](#option-a-local-dev-no-docker)
   - [Option B: Deploy to Render](#option-b-deploy-to-render)
 - [Configuration Reference](#configuration-reference)
+- [ProxyRise Rate Limits & Pricing](#proxyrise-rate-limits--pricing)
 - [Device Spoofing](#device-spoofing)
-- [Proxy Pool & Health Checks](#proxy-pool--health-checks)
+- [IP Isolation & Verification](#ip-isolation--verification)
 - [Monitoring Dashboard](#monitoring-dashboard)
 - [File Inventory](#file-inventory)
 - [Docker vs hg-supervisor](#docker-vs-hg-supervisor)
@@ -33,72 +34,57 @@
 
 ## Why This Exists
 
-Honeygain's official Docker image works, but **Docker Desktop is a resource hog**:
-- Consumes **2GB+ RAM** just for the daemon
-- WSL2 VM eats **5.8GB+ RAM** and keeps CPU at **96-100%**
-- Requires `NET_ADMIN` + iptables → **won't work on Render/Railway**
-- 9 separate containers → complex networking, slow startup
+Honeygain's official Docker image works, but **every instance needs a unique IP** or you get "Network Overused" / banned.
 
-**This project replaces the entire Docker stack** with a single Rust binary that:
-- Spawns honeygain as subprocesses (no containers needed)
-- Embeds proxy rotation (SOCKS5 / HTTP CONNECT)
-- Spoofs 50+ unique Android device models
-- Monitors for network overuse, proxy failures, server-down
-- Works on **Render, Railway, any VPS** without Docker
+**The Problem:** Docker + one proxy → all instances share the same egress IP → honeygain blocks them.
+
+**The Solution:** A single Rust binary that gives **each instance its own static IP** using ProxyRise sticky sessions. No Docker, no iptables, no container networking hacks.
 
 ---
 
 ## Architecture
 
-### New: hg-supervisor (Recommended)
+### v3.0: Sticky Session Model (Recommended)
 
 ```
-                        ┌──────────────────────────┐
-                        │    hg-supervisor (4.2MB)  │
-                        │    Rust Binary            │
-                        └──────────┬───────────────┘
-                                   │
-                    ┌──────────────┼──────────────┐
-                    ▼              ▼              ▼
-            ┌───────────┐  ┌───────────┐  ┌───────────┐
-            │ proxy:9150│  │ proxy:9151│  │ proxy:9152│  ... 50 instances
-            │ local TCP │  │ local TCP │  │ local TCP │
-            └─────┬─────┘  └─────┬─────┘  └─────┬─────┘
-                  │              │              │
-         HTTP_PROXY=:9150  HTTP_PROXY=:9151  HTTP_PROXY=:9152
-                  │              │              │
-            ┌─────▼─────┐  ┌─────▼─────┐  ┌─────▼─────┐
-            │honeygain-1│  │honeygain-2│  │honeygain-3│  ...
-            │ Xioami    │  │ Samsung   │  │ OnePlus   │
-            │ Android 16│  │ Android 16│  │ Android 16│
-            └───────────┘  └───────────┘  └───────────┘
-                  │              │              │
-                  └──────────────┼──────────────┘
-                                 ▼
-                    ┌─────────────────────┐
-                    │   Proxy Pool        │
-                    │   (3-5 upstreams)   │
-                    │ SOCKS5 / HTTP CONNECT│
-                    └──────────┬──────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │  ProxyRise / Any    │
-                    │  Residential Proxy  │
-                    └──────────┬──────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │  api.honeygain.com  │
-                    │  (different exit IP │
-                    │   per proxy)        │
-                    └─────────────────────┘
+                      ┌──────────────────────────────┐
+                      │   hg-supervisor v3.0 (4.2MB)  │
+                      │   Sticky Session Manager      │
+                      └──────┬───────────────────────┘
+                             │
+         ┌───────────────────┼───────────────────┐
+         ▼                   ▼                   ▼
+┌────────────────┐  ┌────────────────┐  ┌────────────────┐
+│ Instance 1     │  │ Instance 2     │  │ Instance 3     │
+│ Device: Xiaomi │  │ Device: Samsung│  │ Device: OnePlus│
+│ Session:       │  │ Session:       │  │ Session:       │
+│ res-US-sid-A   │  │ res-UK-sid-B   │  │ res-JP-sid-C   │
+│ Static US IP   │  │ Static UK IP   │  │ Static JP IP   │
+│ ─── UNIQUE ─── │  │ ─── UNIQUE ─── │  │ ─── UNIQUE ─── │
+└────┬───────────┘  └────┬───────────┘  └────┬───────────┘
+     │                    │                    │
+     └────────────────────┼────────────────────┘
+                          ▼
+              ┌─────────────────────┐
+              │  ProxyRise Gateway  │
+              │  gw.proxyrise.com   │
+              └──────────┬──────────┘
+                         ▼
+              ┌─────────────────────┐
+              │  api.honeygain.com  │
+              │  (3 different exit  │
+              │   IPs from 3 diff   │
+              │   sticky sessions)  │
+              └─────────────────────┘
 ```
 
 **Flow:**
-1. Supervisor spawns **one local TCP proxy per instance** on ports 9150+
-2. Each honeygain subprocess receives `HTTP_PROXY=http://127.0.0.1:915X`
-3. Local proxy tunnels all traffic through **assigned upstream proxy** (SOCKS5/HTTP)
-4. Upstream proxies rotate exit IPs → honeygain sees different IPs per instance
-5. Health endpoint at `:8080/health` → JSON with instance states
+1. Each instance generates a **unique ProxyRise sticky session**: `res-{country}-sid-{random}`
+2. 40 different countries used across instances for max IP diversity
+3. The sticky session assigns a **static IP** — it never rotates until "Network Overused"
+4. IP verified via ipquery.io on startup — logged and tracked in /health endpoint
+5. On "Network Overused" → kill honeygain → rotate session → NEW IP
+6. Health endpoint shows `ip_isolation` percentage (goal: 100%)
 
 ### Old: Docker Compose (Legacy)
 
@@ -126,8 +112,12 @@ Honeygain's official Docker image works, but **Docker Desktop is a resource hog*
 |---------|-------------|
 | 🚫 **No Docker** | Single Rust binary, zero containers, no daemon |
 | 📱 **Device Spoofing** | 50+ Android models (Xiaomi, Samsung, OnePlus, etc.) |
-| 🌐 **Multi-Proxy Pool** | Distribute instances across 3-10+ upstream proxies |
-| 🔄 **Auto-Rotation** | Per-tunnel lifetime (configurable, default 5 min) |
+| 🌐 **Sticky Sessions** | Each instance gets unique ProxyRise sticky session |
+| 🔒 **100% IP Isolation** | 1 container = 1 unique static IP — never shared |
+| 🌍 **40 Countries** | IPs spread across US, UK, DE, JP, CA, AU, FR, etc. |
+| 🔄 **Overuse Rotation** | "Network Overused" → auto-rotate to new IP |
+| ✅ **IP Verification** | ipquery.io check on startup — logged in /health |
+| 📊 **Isolation Dashboard** | /health shows `ip_isolation: "100%"` or warns |
 | ❤️ **Proxy Health Checks** | Circuit breaker: 3 failures → mark dead → auto-revive |
 | 🚨 **Overuse Detection** | Log parser catches "Network Overused" → cooldown |
 | 🛡️ **Auto-Heal** | Dead proxies revived every 60s, crashed processes restarted |
@@ -232,14 +222,17 @@ services:
 | `instances` | `HG_INSTANCES` | `1` | Number of honeygain instances |
 | `email` | `HG_EMAIL` | — | Honeygain account email (required) |
 | `pass` | `HG_PASS` | — | Honeygain account password (required) |
-| `proxy_pool` | `HG_PROXY_POOL` | — | Comma-separated proxy URLs (required) |
-| `upstream_proxy_url` | `UPSTREAM_PROXY_URL` | — | Single proxy (alt to pool) |
+| `proxyrise_endpoint` | `PROXYRISE_ENDPOINT` | — | ProxyRise gateway (host:port) |
+| `proxyrise_api_key` | `PROXYRISE_API_KEY` | — | ProxyRise API key (pgw-...) |
+| `proxy_type` | `PROXY_TYPE` | `res` | Proxy type: res, stc, mob, dc |
+| `verify_ip` | `VERIFY_IP` | `true` | Verify egress IP via ipquery.io |
+| `proxy_pool` | `HG_PROXY_POOL` | — | Comma-separated proxy URLs (legacy) |
+| `upstream_proxy_url` | `UPSTREAM_PROXY_URL` | — | Single proxy (legacy alt) |
 | `device_pool` | `HG_DEVICE_POOL` | [built-in 50 models] | Custom Android model list |
-| `tunnel_lifetime_secs` | `TUNNEL_MAX_LIFETIME_SECS` | `300` | Seconds before tunnel rotation |
+| `tunnel_lifetime_secs` | `TUNNEL_MAX_LIFETIME_SECS` | `86400` | Seconds before tunnel rotation |
 | `proxy_base_port` | `HG_PROXY_BASE_PORT` | `9150` | First local proxy port |
 | `health_port` | `HG_HEALTH_PORT` | `8080` | Health endpoint port |
 | `proxy_max_retries` | `PROXY_MAX_RETRIES` | `3` | Failures before proxy marked dead |
-| `proxy_retry_delay_secs` | — | `60` | Seconds before reviving dead proxy |
 | `overuse_cooldown_secs` | `OVERUSE_COOLDOWN_SECS` | `300` | Cooldown after "Network Overused" |
 | `honeygain_bin` | `HG_BIN_PATH` | `./honeygain` | Path to honeygain binary |
 | `lib_dir` | `HG_LIB_DIR` | — | Path to libhg.so.2.0.0 directory |
@@ -247,28 +240,7 @@ services:
 
 ### Config File Template
 
-Create `supervisor/hg-supervisor.toml`:
-
-```toml
-instances = 50
-email = "your_email@example.com"
-pass = "your_password"
-
-# Multi-proxy pool (comma-separated in env var: HG_PROXY_POOL)
-proxy_pool = [
-    "http://res-any:token1@gw.proxyrise.com:443",
-    "http://res-us:token2@gw.proxyrise.com:443",
-    "http://res-eu:token3@gw.proxyrise.com:443",
-]
-
-tunnel_lifetime_secs = 300
-proxy_base_port = 9150
-health_port = 8080
-proxy_max_retries = 3
-overuse_cooldown_secs = 300
-honeygain_bin = "./honeygain"
-lib_dir = "./libs"
-```
+See [`supervisor/hg-supervisor.toml`](supervisor/hg-supervisor.toml) for the latest config template.
 
 ### Proxy URL Formats
 
@@ -307,26 +279,63 @@ const ANDROID_MODELS: &[&str] = &[
 
 ---
 
-## Proxy Pool & Health Checks
+## ProxyRise Rate Limits & Pricing
+
+ProxyRise doesn't limit concurrent connections per account (unlimited by default).
+Key constraints:
+
+| Limit | Value | Notes |
+|-------|-------|-------|
+| **Concurrent connections** | Unlimited | Per-user caps available on request |
+| **Sticky session SID range** | 10000 - 999999999 | Random SIDs avoid collisions |
+| **Long-session hold** | ~60 minutes | Pinned IP stays stable ~1 hour |
+| **Request size (API)** | 1 MiB body / 128 KiB headers | Tunneled traffic is unlimited |
+| **DNS resolution** | At exit node | Targets resolve in local country |
+| **429 Too Many Requests** | Per-user cap | Backoff with exponential jitter |
+| **403 Forbidden** | Data exhausted or SSRF | 403 = policy, don't retry |
+
+**Pricing (data plans):**
+
+| Plan | Price | Data + Bonus | Best For |
+|------|-------|-------------|----------|
+| Starter | $10 | 25.5 GB + 500 MB | Testing, small deployments |
+| Basic | $25 | 63.75 GB + 2 GB | 10-15 instances, moderate use |
+| Standard | $50 | 127.5 GB + 5 GB | 30-50 instances |
+| Pro | $100 | 255 GB + 15 GB | Heavy use |
+| Business | $250 | 637.5 GB + 50 GB | Multi-service deployments |
+| Enterprise | $500 | 1275 GB + 125 GB | Maximum scale |
+
+**Data cost estimate:** Each honeygain instance consumes ~2-5 GB/month.
+So:
+- **10 instances** → ~20-50 GB/month → **Starter** ($10) should cover
+- **50 instances** → ~100-250 GB/month → **Standard or Pro** ($50-100)
+- **3 Render services × 50 instances** → ~300-750 GB → **Business** ($250)
+
+**Error handling (built into v3.0):**
+- **502/504** → Exponential backoff (250ms → 500ms → 1s → ... 8s) — these are transient
+- **429** → Backoff + retry (same as 502/504)
+- **403** → Don't retry (data exhausted or policy)
+- **407** → Fix credentials (wrong API key)
+
+## IP Isolation & Verification
 
 ### How It Works
 
-1. **Assignment:** Instances are distributed across proxies round-robin
-2. **Connection:** Each proxy tunnel is established per-connection
-3. **Monitoring:** Every proxy failure increments a counter
-4. **Circuit Breaker:** After `proxy_max_retries` (default 3) failures → proxy marked dead
-5. **Auto-Revive:** Dead proxies are retried every `proxy_retry_delay_secs` (default 60s)
-6. **Success Reset:** Successful connections reset the failure counter
+1. **Sticky Session Assignment:** Each instance gets a unique `res-{country}-sid-{N}`
+2. **Country Diversity:** 40 countries spread across instances
+3. **Static IP:** The sticky session holds the same IP until session is rotated
+4. **Overuse Detection:** When honeygain says "Network Overused" → rotate session → NEW IP
+5. **Verification:** `verify_egress_ip()` calls ipquery.io through the proxy to confirm
 
 ### Failure Scenarios
 
 | Scenario | Action |
 |----------|--------|
-| Proxy connection refused | Count failure, try another proxy |
-| Proxy auth failed | Count failure, mark dead faster |
-| Honeygain "Network Overused" | Enter cooldown (5 min default) |
+| Proxy 502/504 | Exponential backoff (250ms→500ms→1s) |
+| Proxy 429 (rate limit) | Backoff + retry |
+| Honeygain "Network Overused" | Rotate sticky session → new IP |
 | Honeygain "Server Down" | Log error, wait for auto-reconnect |
-| All proxies dead | Fallback to first proxy anyway |
+| IP verification failed | Log warning (instance still starts) |
 | Max consecutive errors (5) | Instance marked Dead, stops permanently |
 
 ---
@@ -341,21 +350,20 @@ const ANDROID_MODELS: &[&str] = &[
 {
   "status": "ok",
   "timestamp": "2025-07-31 04:49:00",
-  "instances": 50,
-  "connected": 42,
-  "starting": 3,
-  "overused": 2,
-  "errors": 2,
-  "dead": 1,
-  "proxies": {
-    "total": 5,
-    "healthy": 4,
-    "dead": 1
-  },
+  "instances": 10,
+  "connected": 8,
+  "starting": 1,
+  "overused": 1,
+  "errors": 0,
+  "dead": 0,
+  "ip_isolation": "100%",          ← Every instance has a UNIQUE IP
+  "unique_ips": 8,
+  "verified_instances": 8,
+  "session_countries": 40,
   "details": [
-    {"id": 1, "device": "hgmain-1", "model": "Xiaomi 2311DRK48I Android 16", "state": "Connected", "errors": 0, "overuses": 0, "uptime_secs": 3600},
-    {"id": 2, "device": "hgmain-2", "model": "Samsung SM-S938B Android 16", "state": "Connected", "errors": 0, "overuses": 0, "uptime_secs": 3570},
-    {"id": 3, "device": "hgmain-3", "model": "OnePlus CPH2581 Android 16", "state": "Overused", "errors": 1, "overuses": 1, "uptime_secs": 120}
+    {"id": 1, "device": "hgmain-1", "model": "Xiaomi 2311DRK48I Android 16", "state": "Connected", "ip": "103.15.xx.xx", "session": "us-sid-123456789", "errors": 0, "overuses": 0, "uptime_secs": 3600},
+    {"id": 2, "device": "hgmain-2", "model": "Samsung SM-S938B Android 16", "state": "Connected", "ip": "185.22.xx.xx", "session": "uk-sid-234567890", "errors": 0, "overuses": 0, "uptime_secs": 3570},
+    {"id": 3, "device": "hgmain-3", "model": "OnePlus CPH2581 Android 16", "state": "Overused", "ip": "78.46.xx.xx", "session": "de-sid-345678901", "errors": 1, "overuses": 1, "uptime_secs": 120}
   ]
 }
 ```
@@ -369,6 +377,7 @@ On Render, this serves as the **health check endpoint** — Render's load balanc
 | `Starting` | Instance created, proxy binding |
 | `Connecting` | Honeygain process spawned, awaiting auth |
 | `Connected` | Successfully authorized and earning |
+| `Overused` | "Network Overused" — auto-rotating to new IP |
 | `Overused` | "Network Overused" detected, cooling down |
 | `AuthError` | Invalid credentials or auth failure |
 | `ProxyError` | Proxy connection/auth failed |
@@ -456,16 +465,23 @@ ldd honeygain-binary/honeygain  # Verify all libs are found
 ```bash
 # Increase cooldown
 export OVERUSE_COOLDOWN_SECS=600  # 10 minutes
-# Use more proxies (each with different IP)
-export HG_PROXY_POOL="...more proxies..."
+
+# Sticky sessions auto-rotate on overuse — check health endpoint later
+# to confirm new IPs are assigned
+
 # Reduce instances per Render service
 export HG_INSTANCES=10
+
+# Check health endpoint for IP isolation
+export VERIFY_IP=true
 ```
 
 ### All instances stuck on "Connecting"
-1. Check if proxies are alive: `curl -v http://res-any:token@gw.proxyrise.com:443`
-2. Check honeygain credentials
-3. Check Render logs: `render logs --tail`
+1. Check ProxyRise endpoint: `curl -v http://res-us:API_KEY@gw.proxyrise.com:443`
+2. Verify PROXYRISE_API_KEY is set correctly
+3. Check honeygain credentials (HG_EMAIL, HG_PASS)
+4. Check Render logs: `render logs --tail` or Render dashboard
+5. Try with `VERIFY_IP=false` (ipquery.io might be slow)
 
 ### Render deploy fails
 ```bash
@@ -490,24 +506,38 @@ export HG_PROXY_BASE_PORT=9250
 
 **On Render:** Render uses Docker **in their cloud** to build the image — you don't need Docker Desktop.
 
+### Q: Do I need Docker at all?
+
+**Locally:** No. The supervisor runs natively. You only need Docker **once** to extract the honeygain binary.
+
+**On Render:** Render uses Docker in their cloud to build — you don't need Docker Desktop.
+
 ### Q: Will 50 instances on one Render service work?
 
-**Technically yes** — the supervisor can handle 50+ subprocesses. But all 50 share Render's single egress IP, which honeygain may flag as "Network Overused". **Solution:** Deploy 3-5 Render services with 10-15 instances each, using different proxy pools.
+**With v3.0 sticky sessions:** Yes! Each instance gets its **own unique IP** via ProxyRise sticky sessions. 40 different countries spread across instances. No IP sharing.
 
-### Q: How many proxies do I need?
+**But:** 50 instances on Render's 0.1 core / 512MB may be tight. Start with 10, check `/health`, scale up.
 
-Minimum **3 different proxy IPs** for 50 instances. More is better — with 5+ proxies and active IP rotation, each instance gets a different exit IP.
+### Q: Do I need Docker at all?
 
-### Q: What proxies work?
+**Locally:** No. The supervisor runs natively. You only need Docker **once** to extract the honeygain binary from the official image.
 
-Any SOCKS5 or HTTP CONNECT proxy:
-- **ProxyRise** (recommended, residential IPs)
-- **BrightData** (formerly Luminati)
-- **Oxylabs**
-- **Smartproxy**
-- **Any SOCKS5/HTTP residential proxy**
+**On Render:** Render uses Docker **in their cloud** to build the image — you don't need Docker Desktop.
 
-### Q: Can I run this on Railway, Fly.io, etc.?
+### Q: How many unique IPs do I get?
+
+Up to **40 unique IPs** (one per country in SESSION_COUNTRIES). Each instance gets a different country → different IP pool. You can extend by deploying multiple Render services.
+
+### Q: What proxies work with v3.0?
+
+**ProxyRise** is recommended because their sticky sessions (`res-{country}-sid-{N}`) give per-instance static IPs. Other providers may work if they support HTTP CONNECT with sticky/static sessions.
+
+### Q: How much does this cost to run?
+
+- **Render Starter** ($7/month) — 1 service, 512MB RAM (~10-15 instances)
+- **Render Pro** ($20/month) — 2GB RAM (~30-50 instances)
+- **ProxyRise Starter** ($10/month) — 25.5 GB (~5-10 instances)
+- **ProxyRise Standard** ($50/month) — 127.5 GB (~50 instances)
 
 Yes! Any platform that:
 - Supports Dockerfiles
