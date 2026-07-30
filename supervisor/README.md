@@ -1,207 +1,249 @@
-# 🚀 hg-supervisor — Rust-based honeygain manager
+# 🚀 hg-supervisor v2.0 — Multi-Proxy Honeygain Manager
 
-> **Lightweight replacement for Docker Compose** — one binary, no containers, no iptables, no Docker daemon.
+> **50+ honeygain instances, each as a unique Android device, across a pool of residential proxies.**  
+> Single 4.2MB Rust binary replaces Docker entirely.
 
-## The Problem with Docker
+---
 
-The old setup used **9 Docker containers** (1 rotate-proxy + 8 honeygain) with:
-- `NET_ADMIN` + `NET_RAW` capabilities for iptables
-- `network_mode: "service:rotate-proxy"` for transparent proxy
-- ~200-300MB RAM per container → **~2.7GB total**
-- Docker Desktop daemon running full-time
-- **Doesn't work on Render/Railway** — no privileged mode, no iptables
+## Features
 
-## The Solution: hg-supervisor
+| Feature | Details |
+|---------|---------|
+| 🚫 **No Docker** | Zero containers, zero daemon, zero iptables |
+| 📱 **Device Spoofing** | 50+ Android models (Xiaomi, Samsung, OnePlus, etc.) |
+| 🌐 **Proxy Pool** | 3-10+ upstream proxies, instances distributed round-robin |
+| ❤️ **Health Checks** | Circuit breaker: 3 failures → dead → auto-revive (60s) |
+| 🚨 **Overuse Detection** | "Network Overused" → automatic cooldown |
+| 🩺 **Health Endpoint** | `GET /health` → JSON with instance states |
+| 🐌 **Staggered Startup** | 30s gap between instances |
+| 🔧 **Render Ready** | Dockerfile + render.yaml for one-click deploy |
 
-A single **Rust binary** (~3.9MB) that:
-1. Manages N honeygain subprocesses with auto-restart
-2. Runs a local TCP proxy per instance (no iptables needed)
-3. Each honeygain instance uses `HTTP_PROXY` env var to tunnel through the proxy
-4. Upstream residential proxy (ProxyRise) handles IP rotation
+---
 
-### Architecture
+## Architecture
 
 ```
-hg-supervisor (single binary, ~3.9MB)
-├── proxy-thread-1 → localhost:9150 ← honeygain-1 (subprocess, HTTP_PROXY=:9150)
-├── proxy-thread-2 → localhost:9151 ← honeygain-2 (subprocess, HTTP_PROXY=:9151)
-├── proxy-thread-3 → localhost:9152 ← honeygain-3 (subprocess, HTTP_PROXY=:9152)
-└── ...
-        │
-        ▼ (SOCKS5/HTTP CONNECT)
-    ProxyRise residential proxy
-        │
-        ▼ rotating exit IP
-    api.honeygain.com
+hg-supervisor (4.2MB)
+├── Proxy Pool
+│   ├── proxy-0 → http://res-any:token@gw.proxyrise.com:443
+│   ├── proxy-1 → http://res-us:token@gw.proxyrise.com:443
+│   ├── proxy-2 → http://res-eu:token@gw.proxyrise.com:443
+│   └── proxy-3 → http://res-asia:token@gw.proxyrise.com:443
+│
+├── Instance Manager (50x)
+│   ├── proxy:9150 ← honeygain-1 (Xiaomi 2311DRK48I)
+│   ├── proxy:9151 ← honeygain-2 (Samsung SM-S938B)
+│   ├── proxy:9152 ← honeygain-3 (OnePlus CPH2581)
+│   └── ...
+│
+├── Monitor
+│   ├── stdout parser → state machine
+│   ├── proxy health → circuit breaker
+│   └── overuse detection → cooldown
+│
+└── Health Server (:8080)
+    └── GET /health → JSON
 ```
 
-### Why This Works
-
-The **honeygain CLI is a Go binary** that uses Go's standard `net/http` transport — which **respects `HTTP_PROXY` and `HTTPS_PROXY` environment variables** automatically. We verified this by extracting the binary and checking its strings:
-
-```bash
-$ strings honeygain | grep -i proxy
-HTTP_PROXY
-HTTPS_PROXY
-http_proxy
-https_proxy
-no_proxy
-proxyURL
-```
-
-No iptables, no transparent proxy, no Docker networking hacks needed.
+---
 
 ## Quick Start
 
 ### Prerequisites
-- Docker (one-time only, to extract the honeygain binary)
-- Or the honeygain binary extracted manually
-- A ProxyRise (or any SOCKS5/HTTP) account
+- Rust toolchain (`cargo 1.97+`)
+- Honeygain binary + `libhg.so.2.0.0` (in `../honeygain-binary/`)
+- ProxyRise or any SOCKS5/HTTP proxy account
 
-### 1. Extract the honeygain binary
+### 1. Build
 
 ```bash
-# From the Docker image (requires Docker running):
-docker create --name hg_tmp honeygain/honeygain:latest
-docker cp hg_tmp:/app/honeygain .
-docker cp hg_tmp:/usr/lib/libhg.so.2.0.0 .
-docker rm hg_tmp
-chmod +x honeygain
+cd supervisor
+cargo build --release
 ```
 
 ### 2. Configure
 
-Create `hg-supervisor.toml`:
+Via env vars (recommended for Render):
+
+```bash
+export HG_EMAIL="your_email@example.com"
+export HG_PASS="your_password"
+export HG_PROXY_POOL="http://res-any:token1@gw.proxyrise.com:443,http://res-us:token2@gw.proxyrise.com:443"
+export HG_INSTANCES=4
+export HG_LIB_DIR=../honeygain-binary/libs
+```
+
+Or via config file:
 
 ```toml
+# hg-supervisor.toml
 instances = 4
 email = "your_email@example.com"
 pass = "your_password"
-device_prefix = "HG"
-upstream_proxy_url = "http://res-any:your_token@gw.proxyrise.com:443"
+proxy_pool = [
+    "http://res-any:token1@gw.proxyrise.com:443",
+    "http://res-us:token2@gw.proxyrise.com:443",
+]
 tunnel_lifetime_secs = 300
 proxy_base_port = 9150
-```
-
-Or use environment variables:
-
-```bash
-export HG_EMAIL=your_email@example.com
-export HG_PASS=your_password
-export UPSTREAM_PROXY_URL=http://res-any:token@gw.proxyrise.com:443
-export HG_INSTANCES=4
+health_port = 8080
+proxy_max_retries = 3
+overuse_cooldown_secs = 300
+honeygain_bin = "./honeygain"
+lib_dir = "./libs"
 ```
 
 ### 3. Run
 
 ```bash
-# Build the supervisor
-cd supervisor && cargo build --release
-
-# Copy honeygain binary + libs to supervisor dir
-cp ../honeygain .
-cp ../libs/libhg.so.2.0.0 .
-export LD_LIBRARY_PATH=.
-
-# Run
+export LD_LIBRARY_PATH=../honeygain-binary/libs
 ./target/release/hg-supervisor
 ```
 
-### 4. Docker Deployment (Render, Railway, any PaaS)
+### 4. Check Health
 
 ```bash
-# Build the deploy image
-docker build -t hg-supervisor:latest .
-
-# Run with env vars
-docker run --rm -it \
-  -e HG_EMAIL=your_email \
-  -e HG_PASS=your_password \
-  -e UPSTREAM_PROXY_URL=http://res-any:token@gw.proxyrise.com:443 \
-  -e HG_INSTANCES=4 \
-  hg-supervisor:latest
+curl http://localhost:8080/health
 ```
 
-## Comparison: Docker vs hg-supervisor
+---
 
-| Aspect | Docker (old) | hg-supervisor (new) |
-|--------|-------------|-------------------|
-| Runtime | Docker Desktop daemon | Native binary (~3.9MB) |
-| Containers | 9 (proxy + 8 HG) | 0 |
-| Memory | ~2.7GB (300MB x 9) | ~60MB (15MB x 4 HG) |
-| iptables | Required (NET_ADMIN) | Not needed |
-| Privileges | Capabilities required | No special perms |
-| Render | ❌ Won't work | ✅ Works perfectly |
-| Railway | ❌ Won't work | ✅ Works perfectly |
-| Any VPS | Works but heavy | Works, lightweight |
+## Environment Variables
 
-## Configuration Reference
+| Variable | Default | Description |
+|---|---|---|
+| `HG_EMAIL` | — | Honeygain account email (required) |
+| `HG_PASS` | — | Honeygain account password (required) |
+| `HG_PROXY_POOL` | — | Comma-separated proxy URLs (required) |
+| `UPSTREAM_PROXY_URL` | — | Single proxy (alt to pool) |
+| `HG_DEVICE_POOL` | [50 built-in] | Custom Android model list |
+| `HG_INSTANCES` | `1` | Number of instances |
+| `TUNNEL_MAX_LIFETIME_SECS` | `300` | Tunnel rotation interval |
+| `HG_PROXY_BASE_PORT` | `9150` | First proxy port |
+| `HG_HEALTH_PORT` | `8080` | Health endpoint port |
+| `PROXY_MAX_RETRIES` | `3` | Failures before proxy dead |
+| `OVERUSE_COOLDOWN_SECS` | `300` | Cooldown after overuse |
+| `HG_BIN_PATH` | `./honeygain` | Path to honeygain binary |
+| `HG_LIB_DIR` | — | Path to libs directory |
+| `RUST_LOG` | `info` | Log level |
 
-### Config File (`hg-supervisor.toml`)
+---
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `instances` | `1` | Number of honeygain instances |
-| `email` | — | Honeygain account email |
-| `pass` | — | Honeygain account password |
-| `device_prefix` | `"HG"` | Device name prefix (appends -1, -2, etc.) |
-| `upstream_proxy_url` | — | ProxyRise or any SOCKS5/HTTP proxy URL |
-| `tunnel_lifetime_secs` | `300` | Seconds before tunnel rotation |
-| `proxy_base_port` | `9150` | First local proxy port |
-| `honeygain_bin` | `./honeygain` | Path to honeygain binary |
-| `lib_dir` | `None` | Path to libs (libhg.so.2.0.0) |
+## Proxy Pool
 
-### Environment Variables
+Multiple proxies → different exit IPs → avoid "Network Overused":
 
-| Variable | Config equivalent |
-|----------|------------------|
-| `HG_EMAIL` | email |
-| `HG_PASS` | pass |
-| `HG_INSTANCES` | instances |
-| `HG_DEVICE_PREFIX` | device_prefix |
-| `UPSTREAM_PROXY_URL` | upstream_proxy_url |
-| `TUNNEL_MAX_LIFETIME_SECS` | tunnel_lifetime_secs |
-| `HG_PROXY_BASE_PORT` | proxy_base_port |
-| `HG_BIN_PATH` | honeygain_bin |
-| `HG_LIB_DIR` | lib_dir |
-| `RUST_LOG` | Log level (debug, info, warn, error) |
+```bash
+export HG_PROXY_POOL="http://pool-a:token@proxy1.com:443,http://pool-b:token@proxy2.com:443,http://pool-c:token@proxy3.com:443"
+```
 
-## About Rust Container Runtimes
+- Instances are distributed round-robin
+- Each proxy has a circuit breaker (3 failures → dead → revive after 60s)
+- Successes reset the failure counter
 
-You asked about Rust-based lightweight containers. There are **two categories**:
+---
 
-### 1. OCI Container Runtimes (Youki, Krun, Railcar)
+## Device Spoofing
 
-These are Rust implementations of the OCI runtime spec (what runc does in Go):
-- **Youki** — Most mature, by the containers project. Replaces runc.
-- **Krun** — KVM-based container runtime (heavier, not lighter).
+50+ Android models are built-in:
 
-**Why they don't help here:**
-- They still require container **images** (Dockerfiles, registries)
-- They still need **root namespaces, cgroups, iptables**
-- They **don't work on Render** (no privileged mode)
-- They're for running *existing* container workloads with a different runtime, not for eliminating containers
+| Brand | Models |
+|-------|--------|
+| **Xiaomi** | 2311DRK48I, 2306EPN60G, Redmi Note 14 Pro, Poco X7 Pro |
+| **Samsung** | SM-S938B (S25 Ultra), SM-S928B, Galaxy S25 Ultra |
+| **OnePlus** | CPH2581, CPH2609, OnePlus 13, 13R |
+| **Oppo** | CPH2605, Find X8 Pro, Reno 20 Pro |
+| **Vivo** | V2425, X200 Pro, Y300 Pro, iQOO 15 |
+| **Realme** | RMX5000, GT 8 Pro, Narzo 80 Pro |
+| **Honor** | Magic V4, 400 Pro, X50 GT |
+| **Google** | Pixel 10 Pro, Pixel 9a |
+| **Nothing** | Phone 3a, Phone 3, CMF Phone 2 |
+| **Motorola** | Moto G Power 2026, Edge 60 Pro, Razr 60 Ultra |
+| **Asus** | Zenfone 12 Ultra, ROG Phone 10 |
 
-### 2. Process Supervisors (hg-supervisor — this project)
+Customize via `HG_DEVICE_POOL`:
 
-For the honeygain use case, the real lightweight solution is **no containers at all**:
-- The honeygain binary can run directly as a subprocess
-- Go HTTP_PROXY env var eliminates the need for iptables
-- A single Rust binary manages everything with less memory than 1 Docker container
+```bash
+export HG_DEVICE_POOL="Xiaomi 2311DRK48I Android 16,Samsung SM-S938B Android 16,OnePlus 13 Android 16"
+```
 
-**This is the "Rust container alternative" you were looking for.**
+---
+
+## Monitoring
+
+### Health Endpoint
+
+```
+GET / → JSON
+GET /health → JSON
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2025-07-31 04:49:00",
+  "instances": 50,
+  "connected": 42,
+  "starting": 3,
+  "overused": 2,
+  "errors": 2,
+  "dead": 1,
+  "proxies": { "total": 5, "healthy": 4, "dead": 1 },
+  "details": [
+    {"id":1, "device":"hgmain-1", "model":"Xiaomi 2311DRK48I Android 16", "state":"Connected", "errors":0, "overuses":0, "uptime_secs":3600}
+  ]
+}
+```
+
+### Instance States
+
+| State | Action Taken |
+|---|---|
+| `Starting` | Proxy binding... |
+| `Connecting` | Awaiting honeygain auth |
+| `Connected` | ✅ Earning! |
+| `Overused` | ⏸ Cooldown (configurable) |
+| `AuthError` | ❌ Check credentials |
+| `ProxyError` | 🔄 Circuit breaker |
+| `ServerDown` | ⏳ Waiting for honeygain API |
+| `Dead` | 🛑 Stop (max errors exceeded) |
+
+---
+
+## Docker (for Render only)
+
+You don't need Docker locally. The Dockerfile is for Render's cloud builder:
+
+```dockerfile
+FROM rust:1.81-slim-bookworm AS builder
+# ... builds hg-supervisor
+
+FROM debian:bookworm-slim
+# ... bundles honeygain binary + libs + supervisor
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health
+```
+
+---
+
+## Legacy: Old rotate-proxy
+
+The old iptables-based transparent proxy is in `../rust-proxy/`. It's **not needed** — the supervisor has proxy rotation built in. Kept for reference only.
+
+---
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `supervisor/src/main.rs` | Rust supervisor source (~700 lines) |
-| `supervisor/Cargo.toml` | Rust dependencies |
-| `supervisor/hg-supervisor.toml` | Config file template |
-| `Dockerfile` | Multi-stage build for Render/deploy |
-| `render.yaml` | Render Blueprint config |
-| `build.sh` | Build helper script |
-
-## License
-
-MIT — For educational purposes only. Use honeygain responsibly.
+| File | Description |
+|------|-------------|
+| `src/main.rs` | Complete supervisor (1348 lines Rust) |
+| `Cargo.toml` | Dependencies (tokio, serde, chrono, rand, tracing) |
+| `Cargo.lock` | Locked dependency versions |
+| `hg-supervisor.toml` | Config template |
+| `README.md` | This file |
+| `target/release/hg-supervisor` | Compiled binary (4.2MB Windows, 2.5MB Linux) |
+| `../Dockerfile` | Multi-stage build (Render) |
+| `../render.yaml` | Render Blueprint |
