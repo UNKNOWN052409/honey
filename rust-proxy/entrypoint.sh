@@ -1,21 +1,6 @@
 #!/bin/sh
 # entrypoint.sh — Setup iptables transparent proxy, then run the Rust proxy
-# Dynamically extracts all upstream proxy IPs from env var to avoid loops
-
-# Start socat TLS unwrapper BEFORE iptables so it's not caught by OUTPUT redirect
-UPSTREAM_TLS_HOST="gw.proxyrise.com"
-UPSTREAM_TLS_PORT="443"
-echo "[INIT] Starting socat TLS unwrapper for ProxyRise (pre-iptables)..."
-socat TCP-LISTEN:4443,bind=127.0.0.1,fork,reuseaddr OPENSSL:$UPSTREAM_TLS_HOST:$UPSTREAM_TLS_PORT,verify=0 &
-SOCAT_PID=$!
-sleep 2
-
-# Verify socat is listening
-if cat /proc/net/tcp 2>/dev/null | grep -q "75FF"; then
-    echo "[INIT] ✅ socat TLS unwrapper listening on 127.0.0.1:4443"
-else
-    echo "[INIT] ⚠ socat might not be listening yet"
-fi
+# DIRECT mode: no external upstream proxy, fast fallback to direct connections
 
 echo "[INIT] Setting up iptables transparent proxy rules..."
 
@@ -35,48 +20,10 @@ iptables -t nat -A REDSOCKS -d 192.168.0.0/16 -j RETURN
 iptables -t nat -A REDSOCKS -d 224.0.0.0/4 -j RETURN
 iptables -t nat -A REDSOCKS -d 240.0.0.0/4 -j RETURN
 
-# Skip DNS resolvers (prevent iptables from intercepting DNS lookups for hostname-based upstreams)
+# Skip DNS resolvers
 iptables -t nat -A REDSOCKS -d 192.168.65.7 -j RETURN
 iptables -t nat -A REDSOCKS -p udp --dport 53 -j RETURN
 iptables -t nat -A REDSOCKS -p tcp --dport 53 -j RETURN
-
-# Dynamically skip ALL upstream proxy IPs (prevents loop)
-# Parses IPs from: http://user:pass@HOST:port,http://HOST:port,etc
-# Supports hostnames (resolved via python3) and raw IPs
-for entry in $(echo "${UPSTREAM_PROXY_URL:-}" | tr ',' ' '); do
-    host=$(echo "$entry" | sed -n 's|.*@\([^:]*\):.*|\1|p')       # with auth
-    if [ -z "$host" ]; then
-        host=$(echo "$entry" | sed -n 's|.*//\([^:]*\):.*|\1|p')  # without auth
-    fi
-    if [ -n "$host" ]; then
-        # Check if it's a raw IP (only digits and dots) or a hostname
-        if echo "$host" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
-            iptables -t nat -A REDSOCKS -d "$host" -j RETURN
-            echo "[INIT]  Excluding upstream: $host"
-        else
-            # Hostname — resolve via Python (available in container)
-            echo "[INIT]  Resolving hostname: $host"
-            resolved=$(python3 -c "
-import socket
-try:
-    info = socket.gethostbyname_ex('$host')
-    for ip in info[2]:
-        print(ip)
-except:
-    pass
-" 2>/dev/null)
-            for ip in $resolved; do
-                iptables -t nat -A REDSOCKS -d "$ip" -j RETURN
-                echo "[INIT]  Excluding upstream IP $ip (resolved from $host)"
-            done
-        fi
-    fi
-done
-
-# Also skip manully specified IPs
-for ip in $(echo "${UPSTREAM_IPS_EXCLUDE:-}" | tr ',' ' '); do
-    iptables -t nat -A REDSOCKS -d "$ip" -j RETURN 2>/dev/null
-done
 
 # Skip our own proxy port
 iptables -t nat -A REDSOCKS -p tcp --dport 8080 -j RETURN
@@ -88,7 +35,6 @@ iptables -t nat -A REDSOCKS -p tcp -j REDIRECT --to-port 8080
 iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
 
 # Expand ephemeral port range to handle many concurrent connections through a single NAT
-# Default Linux range is 32768-60999, expand to 10000-65535
 echo 10000 65535 > /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null || true
 # Reduce TIME_WAIT from 60s to 10s so ports recycle faster
 echo 10 > /proc/sys/net/ipv4/tcp_fin_timeout 2>/dev/null || true
@@ -97,15 +43,5 @@ echo "[INIT] Expanded ephemeral port range to 10000-65535, TCP FIN timeout 10s"
 echo "[INIT] iptables rules installed:"
 iptables -t nat -L REDSOCKS -v -n 2>&1
 
-echo "[INIT] Starting socat TLS unwrapper for ProxyRise..."
-# socat listens on 127.0.0.1:4443, wraps TLS to gw.proxyrise.com:443
-# Then Rust proxy can connect raw SOCKS5 to localhost:4443
-# UPSTREAM_PROXY_URL is like: socks5://user:pass@127.0.0.1:4443
-# Extract the REAL ProxyRise hostname from the URL before we replaced it!
-# We need gw.proxyrise.com:443 explicitly here
-UPSTREAM_TLS_HOST="gw.proxyrise.com"
-UPSTREAM_TLS_PORT="443"
-echo "[INIT] socat TLS unwrapper already started pre-iptables (PID $SOCAT_PID)"
-
-echo "[INIT] Starting rotate-proxy..."
+echo "[INIT] Starting rotate-proxy in DIRECT mode..."
 exec /usr/local/bin/rotate-proxy

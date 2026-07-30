@@ -1,77 +1,138 @@
 services:
-  # ============================================================
-  # HONEYGAIN — direct mode (your internet IP)
-  #   ProxyRise credential is temporarily rate-limited
-  #   Will re-enable proxy once credential recovers
-  # ============================================================
-
-  honeygain-defaults: &honeygain-env
-    image: honeygain/honeygain:latest
+  monitor:
+    image: nginx:alpine
+    container_name: monitor
     restart: unless-stopped
+    ports:
+      - "9090:80"
+    volumes:
+      - ./monitor:/usr/share/nginx/html:ro
+
+  rotate-proxy:
+    image: honeygain-rotate-proxy:latest
+    container_name: rotate-proxy
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_local_port_range=10000 65535
+      - net.ipv4.tcp_fin_timeout=5
     environment:
-      - HONEYGAIN_EMAIL=unknown.zuv05082000@gmail.com
-      - HONEYGAIN_PASS=Moin@4455
-    network_mode: "host"
+      - UPSTREAM_PROXY_URL=
+      - LISTEN_ADDR=0.0.0.0:8080
+      - TUNNEL_MAX_LIFETIME_SECS=600
 
-  honeygain-2:
-    <<: *honeygain-env
-    container_name: honeygain-2
+  hg-1:
+    image: honeygain/honeygain:latest
+    container_name: hg-1
+    restart: unless-stopped
+    depends_on:
+      rotate-proxy:
+        condition: service_started
+    network_mode: "service:rotate-proxy"
     command:
-      - -email=unknown.zuv05082000@gmail.com
-      - -pass=Moin@4455
-      - -device=Pixel-9-Pro-2025-B
+      - -email=hgmain.fuldgu@proton.me
+      - -pass=Moin@748655
+      - -device=HG-1
       - -tou-accept
 
-  honeygain-3:
-    <<: *honeygain-env
-    container_name: honeygain-3
+  hg-2:
+    image: honeygain/honeygain:latest
+    container_name: hg-2
+    restart: unless-stopped
+    depends_on:
+      rotate-proxy:
+        condition: service_started
+    network_mode: "service:rotate-proxy"
     command:
-      - -email=unknown.zuv05082000@gmail.com
-      - -pass=Moin@4455
-      - -device=Pixel-9-Pro-2025-C
+      - -email=hgmain.fuldgu@proton.me
+      - -pass=Moin@748655
+      - -device=HG-2
       - -tou-accept
 
-  honeygain-4:
-    <<: *honeygain-env
-    container_name: honeygain-4
+  hg-3:
+    image: honeygain/honeygain:latest
+    container_name: hg-3
+    restart: unless-stopped
+    depends_on:
+      rotate-proxy:
+        condition: service_started
+    network_mode: "service:rotate-proxy"
     command:
-      - -email=unknown.zuv05082000@gmail.com
-      - -pass=Moin@4455
-      - -device=Pixel-9-Pro-2025-D
+      - -email=hgmain.fuldgu@proton.me
+      - -pass=Moin@748655
+      - -device=HG-3
       - -tou-accept
 
-  honeygain-5:
-    <<: *honeygain-env
-    container_name: honeygain-5
+  hg-4:
+    image: honeygain/honeygain:latest
+    container_name: hg-4
+    restart: unless-stopped
+    depends_on:
+      rotate-proxy:
+        condition: service_started
+    network_mode: "service:rotate-proxy"
     command:
-      - -email=unknown.zuv05082000@gmail.com
-      - -pass=Moin@4455
-      - -device=Pixel-9-Pro-2025-E
+      - -email=hgmain.fuldgu@proton.me
+      - -pass=Moin@748655
+      - -device=HG-4
       - -tou-accept
 
-  honeygain-6:
-    <<: *honeygain-env
-    container_name: honeygain-6
+  hg-5:
+    image: honeygain/honeygain:latest
+    container_name: hg-5
+    restart: unless-stopped
+    depends_on:
+      rotate-proxy:
+        condition: service_started
+    network_mode: "service:rotate-proxy"
     command:
-      - -email=unknown.zuv05082000@gmail.com
-      - -pass=Moin@4455
-      - -device=Pixel-9-Pro-2025-F
+      - -email=hgmain.fuldgu@proton.me
+      - -pass=Moin@748655
+      - -device=HG-5
       - -tou-accept
 
-  honeygain-7:
-    <<: *honeygain-env
-    container_name: honeygain-7
+  hg-6:
+    image: honeygain/honeygain:latest
+    container_name: hg-6
+    restart: unless-stopped
+    depends_on:
+      rotate-proxy:
+        condition: service_started
+    network_mode: "service:rotate-proxy"
     command:
-      - -email=unknown.zuv05082000@gmail.com
-      - -pass=Moin@4455
-      - -device=Pixel-9-Pro-2025-G
+      - -email=hgmain.fuldgu@proton.me
+      - -pass=Moin@748655
+      - -device=HG-6
       - -tou-accept
 
-  honeygain-8:
-    <<: *honeygain-env
-    container_name: honeygain-8
+  hg-7:
+    image: honeygain/honeygain:latest
+    container_name: hg-7
+    restart: unless-stopped
+    depends_on:
+      rotate-proxy:
+        condition: service_started
+    network_mode: "service:rotate-proxy"
     command:
-      - -email=unknown.zuv05082000@gmail.com
-      - -pass=Moin@4455
-      - -device=Pixel-9-Pro-2025-H
+      - -email=hgmain.fuldgu@proton.me
+      - -pass=Moin@748655
+      - -device=HG-7
+      - -tou-accept
+
+  hg-8:
+    image: honeygain/honeygain:latest
+    container_name: hg-8
+    restart: unless-stopped
+    depends_on:
+      rotate-proxy:
+        condition: service_started
+    network_mode: "service:rotate-proxy"
+    command:
+      - -email=hgmain.fuldgu@proton.me
+      - -pass=Moin@748655
+      - -device=HG-8
       - -tou-accept

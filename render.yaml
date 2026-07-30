@@ -1,0 +1,28 @@
+# Render Blueprint for hg-supervisor v2.0
+# Deploy up to 50 honeygain instances across proxy pool
+
+services:
+  - type: web
+    name: hg-supervisor-1
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: HG_INSTANCES
+        value: "50"
+      - key: HG_EMAIL
+        sync: false
+      - key: HG_PASS
+        sync: false
+      - key: HG_PROXY_POOL
+        value: "http://res-any:token1@gw.proxyrise.com:443,http://res-us:token2@gw.proxyrise.com:443,http://res-eu:token3@gw.proxyrise.com:443"
+      - key: TUNNEL_MAX_LIFETIME_SECS
+        value: "300"
+      - key: PROXY_MAX_RETRIES
+        value: "3"
+      - key: OVERUSE_COOLDOWN_SECS
+        value: "300"
+      - key: RUST_LOG
+        value: "info"

@@ -1,0 +1,36 @@
+# hg-supervisor v2.0 configuration
+# For Render deployment — use env vars instead for credentials
+
+instances = 50
+email = "your_email@example.com"
+pass = "your_password"
+device_prefix = "HG"
+
+# Multi-proxy pool (comma-separated in env var: HG_PROXY_POOL)
+# At least 3-5 different proxy IPs needed to avoid overuse
+proxy_pool = [
+    "http://res-any:token1@gw.proxyrise.com:443",
+    "http://res-us:token2@gw.proxyrise.com:443",
+    "http://res-eu:token3@gw.proxyrise.com:443",
+    "http://res-asia:token4@gw.proxyrise.com:443",
+    "http://res-any:token5@gw.proxyrise.com:443",
+]
+
+# Tunnel rotation (seconds)
+tunnel_lifetime_secs = 300
+
+# Ports
+proxy_base_port = 9150
+health_port = 8080
+
+# Proxy failure handling
+proxy_max_retries = 3
+proxy_retry_delay_secs = 60
+proxy_health_interval_secs = 30
+
+# Cooldown after "Network Overused"
+overuse_cooldown_secs = 300
+
+# Paths (adjust for local dev)
+honeygain_bin = "./honeygain"
+lib_dir = "./libs"

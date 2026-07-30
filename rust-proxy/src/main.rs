@@ -125,6 +125,11 @@ fn parse_proxy_url(url: &str) -> Option<(String, u16, UpstreamType, String, Stri
 
     let host = host_str.to_string();
 
+    // Skip empty host (e.g. empty UPSTREAM_PROXY_URL env var)
+    if host.is_empty() {
+        return None;
+    }
+
     if is_socks5 {
         let (user, pass) = if let Some(colon) = auth.find(':') {
             (auth[..colon].to_string(), auth[colon + 1..].to_string())
@@ -298,13 +303,19 @@ async fn try_one_upstream(
 
 /// Try all upstream proxies with retries, return first successful tunnel.
 /// If ALL fail after 3 attempts, returns an error (caller may fall back to DIRECT).
+/// If NO upstreams configured, immediately goes DIRECT.
 async fn upstream_connect(
     host: &str,
     port: u16,
     upstreams: &[UpstreamConfig],
 ) -> Result<(TcpStream, String), String> {
     if upstreams.is_empty() {
-        return Err("no upstream proxies configured".to_string());
+        // No upstreams configured — go DIRECT immediately
+        let stream = tokio::time::timeout(Duration::from_secs(15), TcpStream::connect((host, port)))
+            .await
+            .map_err(|_| format!("connect timeout to {}:{}", host, port))?
+            .map_err(|e| format!("connect to {}:{}: {}", host, port, e))?;
+        return Ok((stream, "DIRECT".to_string()));
     }
     let mut last_err = String::new();
     for attempt in 0..3 {
@@ -509,16 +520,7 @@ async fn main() {
     }
 
     if upstreams.is_empty() {
-        log("[INIT] ⚠ No upstream proxies configured!");
-        upstreams.push(UpstreamConfig {
-            proto: UpstreamType::HttpConnect,
-            host: "127.0.0.1".to_string(),
-            port: 1,
-            auth: "".to_string(),
-            socks5_user: String::new(),
-            socks5_pass: String::new(),
-            label: "DIRECT".to_string(),
-        });
+        log("[INIT] ⚠ No upstream proxies configured — going DIRECT!");
     }
 
     log(&format!("[INIT] {} upstream(s) configured:", upstreams.len()));
@@ -526,9 +528,10 @@ async fn main() {
         log(&format!("  {} {}", if up.label == upstreams[0].label { "▶" } else { " " }, up.label));
     }
 
-    // Validate upstreams
-    log("[INIT] Validating upstream proxies...");
-    for up in &upstreams {
+    // Validate upstreams (skip if empty/DIRECT)
+    if !upstreams.is_empty() {
+        log("[INIT] Validating upstream proxies...");
+        for up in &upstreams {
         match tokio::time::timeout(Duration::from_secs(15), async {
             match up.proto {
                 UpstreamType::Socks5 => {
@@ -555,6 +558,9 @@ async fn main() {
             Ok(Err(e)) => log(&format!("  ❌ {}: {}", up.label, e)),
             Err(_) => log(&format!("  ❌ {}: timeout", up.label)),
         }
+    }
+    } else {
+        log("[INIT] No upstreams to validate — running in DIRECT mode");
     }
 
     log(&format!("[INIT] Listening on {}", listen_addr));
