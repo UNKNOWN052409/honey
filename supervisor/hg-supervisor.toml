@@ -1,10 +1,23 @@
-# hg-supervisor v3.0 configuration
+# hg-supervisor v3.1 configuration
 # Sticky Session Mode — 1 Instance = 1 Static IP
+# Multi-Account — honeygain allows ~10 devices per account
 # For Render deployment — use env vars for credentials
 
 instances = 10
+
+# ── Multi-Account Config ──
+# Honeygain allows ~10 devices per account (different networks).
+# 50 instances = 5 accounts x 10 devices.
+# Prefer HG_ACCOUNTS env var on Render: HG_ACCOUNTS="email1:pass1,email2:pass2,..."
+# accounts = [
+#   { email = "acct1@example.com", pass = "pass1" },
+#   { email = "acct2@example.com", pass = "pass2" },
+# ]
+# If `accounts` is empty, falls back to email/pass below (single account mode).
 email = "your_email@example.com"
 pass = "your_password"
+# Max devices per honeygain account (honeygain policy: 10)
+max_devices_per_account = 10
 
 # ── ProxyRise Sticky Session Config ──
 # Each instance gets a unique res-{country}-sid-{N} sticky session

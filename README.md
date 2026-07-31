@@ -220,8 +220,10 @@ services:
 | CLI / Config File | Env Variable | Default | Description |
 |---|---|---|---|
 | `instances` | `HG_INSTANCES` | `1` | Number of honeygain instances |
-| `email` | `HG_EMAIL` | — | Honeygain account email (required) |
-| `pass` | `HG_PASS` | — | Honeygain account password (required) |
+| `accounts` | `HG_ACCOUNTS` | — | Multi-account pool: `email1:pass1,email2:pass2` |
+| `max_devices_per_account` | `MAX_DEVICES_PER_ACCOUNT` | `10` | Max devices per honeygain account |
+| `email` | `HG_EMAIL` | — | Honeygain account email (single-mode fallback) |
+| `pass` | `HG_PASS` | — | Honeygain account password (single-mode fallback) |
 | `proxyrise_endpoint` | `PROXYRISE_ENDPOINT` | — | ProxyRise gateway (host:port) |
 | `proxyrise_api_key` | `PROXYRISE_API_KEY` | — | ProxyRise API key (pgw-...) |
 | `proxy_type` | `PROXY_TYPE` | `res` | Proxy type: res, stc, mob, dc |
@@ -311,11 +313,65 @@ So:
 - **50 instances** → ~100-250 GB/month → **Standard or Pro** ($50-100)
 - **3 Render services × 50 instances** → ~300-750 GB → **Business** ($250)
 
-**Error handling (built into v3.0):**
+**Error handling (built into v3.1):**
 - **502/504** → Exponential backoff (250ms → 500ms → 1s → ... 8s) — these are transient
 - **429** → Backoff + retry (same as 502/504)
 - **403** → Don't retry (data exhausted or policy)
 - **407** → Fix credentials (wrong API key)
+
+## Multi-Account Support (honeygain 10-device limit)
+
+> **Honeygain allows ~10 devices per account** (different networks).
+> Running 50 instances on ONE account triggers "Network Overused" regardless of IP isolation.
+> **Solution: 50 instances = 5 accounts × 10 devices each.**
+
+### How Account Assignment Works
+
+1. Accounts are configured via `HG_ACCOUNTS="email1:pass1,email2:pass2,..."`
+2. Instances are distributed round-robin: instance 1-10 → account 1, 11-20 → account 2, etc.
+3. Each instance keeps its **unique sticky session IP** — multi-account does NOT change IP isolation
+4. `MAX_DEVICES_PER_ACCOUNT` (default 10) caps devices per account
+5. Startup warns if `instances > accounts × max_devices_per_account`
+
+### Config Formats
+
+**Env (Render):**
+```bash
+export HG_ACCOUNTS="acct1@example.com:pass1,acct2@example.com:pass2,acct3@example.com:pass3"
+export MAX_DEVICES_PER_ACCOUNT=10
+```
+
+**Config file (hg-supervisor.toml):**
+```toml
+accounts = [
+  { email = "acct1@example.com", pass = "pass1" },
+  { email = "acct2@example.com", pass = "pass2" },
+]
+max_devices_per_account = 10
+```
+
+**Single-account mode (backward compatible):**
+```bash
+export HG_EMAIL="your@email.com"
+export HG_PASS="password"   # used when HG_ACCOUNTS is empty
+```
+
+### Scaling Formula
+
+| Instances | Accounts needed (10/account) |
+|-----------|------------------------------|
+| 10 | 1 |
+| 20 | 2 |
+| 30 | 3 |
+| 50 | 5 |
+
+### Health Endpoint shows accounts
+
+`GET /health` now reports per-instance account (masked):
+```json
+{"id":1,"device":"acct1-1","account":"ac***@example.com","ip":"103.15.xx.xx"}
+```
+Passwords are **never** exposed in /health.
 
 ## IP Isolation & Verification
 

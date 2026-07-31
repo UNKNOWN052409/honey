@@ -1,12 +1,15 @@
-//! hg-supervisor v3.0 — Sticky Session Edition
+//! hg-supervisor v3.1 — Sticky Session + Multi-Account Edition
 //!
 //! Every honeygain instance gets a UNIQUE static IP via ProxyRise sticky sessions.
 //! 1 container = 1 IP. No sharing, no rotation until "Network Overused".
 //! Country diversity across instances for max IP pool spread.
+//! Multi-account support: honeygain allows ~10 devices per account,
+//! so 50 instances = 5 accounts × 10 devices.
 //!
 //! Features:
 //! - 50+ instances, each with unique Android device spoofing
 //! - ProxyRise sticky sessions (res-{country}-sid-{N}) — one IP per instance
+//! - Multi-account pool (HG_ACCOUNTS=email1:pass1,email2:pass2)
 //! - Overuse detection → new sticky session = new IP
 //! - IP verification via ipquery.io on startup + health endpoint
 //! - ProxyRise 429/502/504 handling with exponential backoff
@@ -60,13 +63,47 @@ const SESSION_COUNTRIES: &[&str] = &[
 
 // ─── Configuration ────────────────────────────────────────────────────────
 
+/// A honeygain account credential pair
+#[derive(Debug, Clone, Deserialize)]
+struct Account {
+    email: String,
+    pass: String,
+}
+
+/// Parse the HG_ACCOUNTS env var: "email1:pass1,email2:pass2"
+/// Uses splitn(2, ':') so passwords containing ':' still parse correctly.
+fn parse_accounts(raw: &str) -> Vec<Account> {
+    raw.split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .filter_map(|pair| {
+            let mut it = pair.splitn(2, ':');
+            let email = it.next().unwrap_or("").trim().to_string();
+            let pass = it.next().unwrap_or("").trim().to_string();
+            if email.is_empty() || pass.is_empty() {
+                None
+            } else {
+                Some(Account { email, pass })
+            }
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct Config {
     /// Number of honeygain instances
     instances: u8,
-    /// Honeygain credentials
+    /// Honeygain credentials (single-account mode; HG_ACCOUNTS overrides)
+    #[serde(default)]
     email: String,
+    #[serde(default)]
     pass: String,
+    /// Multi-account pool (HG_ACCOUNTS env or `accounts` in TOML)
+    #[serde(default)]
+    accounts: Vec<Account>,
+    /// Max devices allowed per honeygain account (honeygain policy: 10)
+    #[serde(default = "default_max_devices")]
+    max_devices_per_account: u8,
 
     // ── ProxyRise sticky session config ──
     /// ProxyRise gateway endpoint (host:port), e.g. "gw.proxyrise.com:443"
@@ -119,6 +156,7 @@ struct Config {
 }
 
 fn default_verify_ip() -> bool { true }
+fn default_max_devices() -> u8 { 10 }
 fn default_tunnel_lifetime() -> u64 { 86400 } // 24h — sticky session no rotation
 fn default_proxy_base_port() -> u16 { 9150 }
 fn default_health_port() -> u16 { 8080 }
@@ -137,6 +175,8 @@ fn load_config() -> Result<Config> {
         instances: 1,
         email: String::new(),
         pass: String::new(),
+        accounts: vec![],
+        max_devices_per_account: default_max_devices(),
         proxyrise_endpoint: None,
         proxyrise_api_key: None,
         proxy_type: default_proxy_type(),
@@ -169,6 +209,17 @@ fn load_config() -> Result<Config> {
     if let Ok(v) = env::var("HG_INSTANCES") { config.instances = v.parse().unwrap_or(1); }
     if let Ok(v) = env::var("HG_EMAIL") { config.email = v; }
     if let Ok(v) = env::var("HG_PASS") { config.pass = v; }
+    if let Ok(v) = env::var("HG_ACCOUNTS") {
+        let parsed = parse_accounts(&v);
+        if !parsed.is_empty() {
+            config.accounts = parsed;
+        } else {
+            warn!("HG_ACCOUNTS parsed to zero accounts, falling back to HG_EMAIL/HG_PASS");
+        }
+    }
+    if let Ok(v) = env::var("MAX_DEVICES_PER_ACCOUNT") {
+        config.max_devices_per_account = v.parse().unwrap_or(10);
+    }
     if let Ok(v) = env::var("PROXYRISE_ENDPOINT") { config.proxyrise_endpoint = Some(v); }
     if let Ok(v) = env::var("PROXYRISE_API_KEY") { config.proxyrise_api_key = Some(v); }
     if let Ok(v) = env::var("PROXY_TYPE") { config.proxy_type = v; }
@@ -191,6 +242,16 @@ fn load_config() -> Result<Config> {
 
     if config.device_pool.is_empty() {
         config.device_pool = ANDROID_MODELS.iter().map(|s| s.to_string()).collect();
+    }
+
+    // Resolve account pool: HG_ACCOUNTS takes precedence, else single HG_EMAIL/HG_PASS
+    if config.accounts.is_empty() {
+        if !config.email.is_empty() && !config.pass.is_empty() {
+            config.accounts.push(Account {
+                email: config.email.clone(),
+                pass: config.pass.clone(),
+            });
+        }
     }
 
     Ok(config)
@@ -382,6 +443,8 @@ struct InstanceInfo {
     state: InstanceState,
     model: String,
     device_name: String,
+    account_email: String,
+    account_pass: String,
     sticky_session: Option<StickySession>,
     verified_ip: Option<String>,
     error_count: u32,
@@ -399,6 +462,8 @@ impl InstanceInfo {
             state: InstanceState::Starting,
             model,
             device_name,
+            account_email: String::new(),
+            account_pass: String::new(),
             sticky_session: None,
             verified_ip: None,
             error_count: 0,
@@ -812,8 +877,8 @@ async fn spawn_honeygain(
     let proxy_url = format!("http://127.0.0.1:{}", proxy_port);
     let mut cmd = Command::new(bin_path);
     cmd.args(&[
-        "-email", &config.email,
-        "-pass", &config.pass,
+        "-email", &instance.account_email,
+        "-pass", &instance.account_pass,
         "-device", &instance.device_name,
         "-tou-accept",
     ]);
@@ -904,6 +969,32 @@ async fn monitor_honeygain_stdout(
     }
 }
 
+/// Mask an email for display: keep first 2 chars + domain (never leak full credentials)
+fn mask_email(email: &str) -> String {
+    let (local, domain) = match email.split_once('@') {
+        Some((l, d)) => (l, d),
+        None => (email, ""),
+    };
+    if local.len() <= 2 {
+        if domain.is_empty() {
+            "***".to_string()
+        } else {
+            format!("***@{}", domain)
+        }
+    } else {
+        format!("{}***@{}", &local[..2], domain)
+    }
+}
+
+/// Pick the account for an instance, round-robin across the account pool
+/// so no account exceeds `max_devices_per_account` concurrent devices.
+fn pick_account(config: &Config, instance_id: u8) -> Account {
+    let n = config.accounts.len().max(1);
+    let per = config.max_devices_per_account.max(1) as usize;
+    let idx = ((instance_id as usize - 1) / per) % n;
+    config.accounts[idx].clone()
+}
+
 async fn manage_instance(
     app_state: Arc<AppState>,
     instance_id: u8,
@@ -917,7 +1008,15 @@ async fn manage_instance(
         let idx = (instance_id as usize - 1) % models.len();
         models[idx].clone()
     };
-    let device_name = format!("{}-{}", config.email.split('@').next().unwrap_or("HG"), instance_id);
+
+    // Pick the account for this instance (round-robin across accounts)
+    let account = pick_account(config, instance_id);
+    let account_email = account.email.clone();
+    let device_name = format!(
+        "{}-{}",
+        account.email.split('@').next().unwrap_or("HG"),
+        instance_id
+    );
 
     // Generate initial sticky session
     let session = app_state.session_mgr.generate_session(instance_id).await;
@@ -926,12 +1025,15 @@ async fn manage_instance(
     {
         let mut inst = InstanceInfo::new(instance_id, model.clone(), device_name.clone());
         inst.sticky_session = Some(session);
+        inst.account_email = account_email.clone();
+        inst.account_pass = account.pass.clone();
         let mut slot = app_state.instances[instance_id as usize - 1].lock().await;
         *slot = inst;
     }
 
     info!(
         instance = instance_id,
+        account = %mask_email(&account_email),
         device = %device_name,
         model = %model,
         proxy_port = proxy_port,
@@ -1021,6 +1123,8 @@ async fn manage_instance(
                 state: InstanceState::Starting,
                 model: info.model.clone(),
                 device_name: info.device_name.clone(),
+                account_email: info.account_email.clone(),
+                account_pass: info.account_pass.clone(),
                 sticky_session: info.sticky_session.clone(),
                 verified_ip: info.verified_ip.clone(),
                 error_count: info.error_count,
@@ -1167,11 +1271,12 @@ async fn generate_health_json(app_state: &AppState) -> String {
         let session_info = info.sticky_session.as_ref()
             .map(|s| format!("{}-sid-{}", s.country, s.sid))
             .unwrap_or_else(|| "none".to_string());
+        let account_str = mask_email(&info.account_email);
 
         details.push(format!(
-            r#"{{"id":{},"device":"{}","model":"{}","state":"{}","ip":"{}","session":"{}","errors":{},"overuses":{},"uptime_secs":{}}}"#,
+            r#"{{"id":{},"device":"{}","model":"{}","state":"{}","ip":"{}","session":"{}","account":"{}","errors":{},"overuses":{},"uptime_secs":{}}}"#,
             i + 1, info.device_name, info.model, state_str,
-            ip, session_info,
+            ip, session_info, account_str,
             info.error_count, info.overuse_count,
             info.started_at.elapsed().as_secs(),
         ));
@@ -1186,11 +1291,13 @@ async fn generate_health_json(app_state: &AppState) -> String {
     let json = format!(
         r#"{{
   "status":"ok","timestamp":"{}","instances":{},"connected":{},"starting":{},"overused":{},"errors":{},"dead":{},
+  "accounts":{},"max_devices_per_account":{},
   "ip_isolation":"{}","unique_ips":{},"verified_instances":{},
   "session_countries":{},"details":[{}]
 }}"#,
         Local::now().format("%Y-%m-%d %H:%M:%S"),
         total, connected, starting, overused, errors, dead,
+        app_state.config.accounts.len(), app_state.config.max_devices_per_account,
         ip_isolation, unique_ips.len(), ip_count,
         SESSION_COUNTRIES.len(),
         details.join(","),
@@ -1209,9 +1316,9 @@ async fn main() -> Result<()> {
         .init();
 
     info!("╔══════════════════════════════════════════════╗");
-    info!("║  hg-supervisor v3.0                         ║");
+    info!("║  hg-supervisor v3.1                         ║");
     info!("║  Sticky Session — 1 Instance = 1 Static IP  ║");
-    info!("║  100% IP Isolation                          ║");
+    info!("║  Multi-Account: 10 devices/account max      ║");
     info!("╚══════════════════════════════════════════════╝");
 
     let config = Arc::new(load_config()?);
@@ -1219,8 +1326,23 @@ async fn main() -> Result<()> {
     if config.instances == 0 {
         anyhow::bail!("instances must be >= 1");
     }
-    if config.email.is_empty() || config.pass.is_empty() {
-        anyhow::bail!("HG_EMAIL and HG_PASS must be set");
+    if config.accounts.is_empty() {
+        anyhow::bail!(
+            "no honeygain accounts configured. Set HG_ACCOUNTS='email1:pass1,email2:pass2' or HG_EMAIL+HG_PASS"
+        );
+    }
+
+    // Warn if too many instances for the account pool (honeygain: 10 devices/account)
+    let per = config.max_devices_per_account.max(1) as usize;
+    let max_total = config.accounts.len() * per;
+    if config.instances as usize > max_total {
+        warn!(
+            instances = config.instances,
+            accounts = config.accounts.len(),
+            max_devices_per_account = config.max_devices_per_account,
+            needed_accounts = ((config.instances as usize + per - 1) / per),
+            "instances exceed account capacity — honeygain allows ~10 devices per account, "
+        );
     }
 
     // Initialize session manager

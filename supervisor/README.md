@@ -1,7 +1,7 @@
-# 🚀 hg-supervisor v2.0 — Multi-Proxy Honeygain Manager
+# 🚀 hg-supervisor v3.1 — Sticky Session + Multi-Account Edition
 
-> **50+ honeygain instances, each as a unique Android device, across a pool of residential proxies.**  
-> Single 4.2MB Rust binary replaces Docker entirely.
+> **50+ honeygain instances, each with its own UNIQUE static IP via ProxyRise sticky sessions.**  
+> Single 4.4MB Rust binary replaces Docker entirely. 1 container = 1 IP, 100% isolation.
 
 ---
 
@@ -11,10 +11,11 @@
 |---------|---------|
 | 🚫 **No Docker** | Zero containers, zero daemon, zero iptables |
 | 📱 **Device Spoofing** | 50+ Android models (Xiaomi, Samsung, OnePlus, etc.) |
-| 🌐 **Proxy Pool** | 3-10+ upstream proxies, instances distributed round-robin |
-| ❤️ **Health Checks** | Circuit breaker: 3 failures → dead → auto-revive (60s) |
-| 🚨 **Overuse Detection** | "Network Overused" → automatic cooldown |
-| 🩺 **Health Endpoint** | `GET /health` → JSON with instance states |
+| 🌐 **1 Instance = 1 IP** | Unique `res-{country}-sid-{N}` sticky session per instance |
+| 🗺️ **40 Countries** | US, UK, DE, JP, CA, AU, FR... max IP diversity |
+| 🔄 **Overuse Rotation** | "Network Overused" → kill → rotate SID → NEW IP |
+| 👥 **Multi-Account** | `HG_ACCOUNTS="e1:p1,e2:p2"` — honeygain allows ~10 devices/account |
+| 🩺 **Health Endpoint** | `GET /health` → JSON with per-instance IPs + isolation % |
 | 🐌 **Staggered Startup** | 30s gap between instances |
 | 🔧 **Render Ready** | Dockerfile + render.yaml for one-click deploy |
 
@@ -23,27 +24,38 @@
 ## Architecture
 
 ```
-hg-supervisor (4.2MB)
-├── Proxy Pool
-│   ├── proxy-0 → http://res-any:token@gw.proxyrise.com:443
-│   ├── proxy-1 → http://res-us:token@gw.proxyrise.com:443
-│   ├── proxy-2 → http://res-eu:token@gw.proxyrise.com:443
-│   └── proxy-3 → http://res-asia:token@gw.proxyrise.com:443
+hg-supervisor (4.4MB)
+├── Account Pool
+│   ├── acct-1 → email1:pass1  (instances 1-10)
+│   ├── acct-2 → email2:pass2  (instances 11-20)
+│   └── acct-3 → email3:pass3  (instances 21-30)
 │
-├── Instance Manager (50x)
-│   ├── proxy:9150 ← honeygain-1 (Xiaomi 2311DRK48I)
-│   ├── proxy:9151 ← honeygain-2 (Samsung SM-S938B)
-│   ├── proxy:9152 ← honeygain-3 (OnePlus CPH2581)
+├── Instance Manager (up to 50x)
+│   ├── instance-1 → res-us-sid-123456  → US IP   → acct-1
+│   ├── instance-2 → res-uk-sid-234567  → UK IP   → acct-1
+│   ├── instance-3 → res-de-sid-345678  → DE IP   → acct-1
+│   ├── instance-11 → res-jp-sid-456789 → JP IP   → acct-2
 │   └── ...
 │
 ├── Monitor
 │   ├── stdout parser → state machine
-│   ├── proxy health → circuit breaker
-│   └── overuse detection → cooldown
+│   ├── overuse detection → rotation signal
+│   └── egress IP verification (ipquery.io, optional)
 │
 └── Health Server (:8080)
-    └── GET /health → JSON
+    └── GET /health → JSON (IPs, accounts, isolation %)
 ```
+
+---
+
+## Honeygain's 10-Device Rule (Important)
+
+> **Honeygain allows ~10 devices per account on different networks.**  
+> 50 instances on ONE account triggers "Network Overused" — regardless of IP isolation.
+> **Solution: 50 instances = 5 accounts × 10 devices.**
+
+Account assignment is round-robin: instances 1-10 → account 1, 11-20 → account 2, etc.
+`MAX_DEVICES_PER_ACCOUNT` (default 10) enforces the cap; startup logs a warning if exceeded.
 
 ---
 
@@ -52,7 +64,7 @@ hg-supervisor (4.2MB)
 ### Prerequisites
 - Rust toolchain (`cargo 1.97+`)
 - Honeygain binary + `libhg.so.2.0.0` (in `../honeygain-binary/`)
-- ProxyRise or any SOCKS5/HTTP proxy account
+- ProxyRise account with API key (sticky sessions)
 
 ### 1. Build
 
@@ -66,10 +78,21 @@ cargo build --release
 Via env vars (recommended for Render):
 
 ```bash
+# Multi-account mode (recommended for 10+ instances)
+export HG_ACCOUNTS="acct1@example.com:pass1,acct2@example.com:pass2,acct3@example.com:pass3"
+export MAX_DEVICES_PER_ACCOUNT=10
+export HG_INSTANCES=30
+
+# Single-account mode (backward compatible; used if HG_ACCOUNTS empty)
 export HG_EMAIL="your_email@example.com"
 export HG_PASS="your_password"
-export HG_PROXY_POOL="http://res-any:token1@gw.proxyrise.com:443,http://res-us:token2@gw.proxyrise.com:443"
-export HG_INSTANCES=4
+
+# ProxyRise sticky sessions
+export PROXYRISE_ENDPOINT="gw.proxyrise.com:443"
+export PROXYRISE_API_KEY="pgw-your-api-key-here"
+export PROXY_TYPE="res"          # res, stc, mob, dc
+export VERIFY_IP="true"          # ipquery.io egress check (set false on 0.1-core)
+
 export HG_LIB_DIR=../honeygain-binary/libs
 ```
 
@@ -77,18 +100,20 @@ Or via config file:
 
 ```toml
 # hg-supervisor.toml
-instances = 4
-email = "your_email@example.com"
-pass = "your_password"
-proxy_pool = [
-    "http://res-any:token1@gw.proxyrise.com:443",
-    "http://res-us:token2@gw.proxyrise.com:443",
+instances = 30
+accounts = [
+    { email = "acct1@example.com", pass = "pass1" },
+    { email = "acct2@example.com", pass = "pass2" },
+    { email = "acct3@example.com", pass = "pass3" },
 ]
-tunnel_lifetime_secs = 300
+max_devices_per_account = 10
+proxyrise_endpoint = "gw.proxyrise.com:443"
+proxyrise_api_key = "pgw-your-api-key-here"
+proxy_type = "res"
+verify_ip = true
+overuse_cooldown_secs = 300
 proxy_base_port = 9150
 health_port = 8080
-proxy_max_retries = 3
-overuse_cooldown_secs = 300
 honeygain_bin = "./honeygain"
 lib_dir = "./libs"
 ```
@@ -112,13 +137,17 @@ curl http://localhost:8080/health
 
 | Variable | Default | Description |
 |---|---|---|
-| `HG_EMAIL` | — | Honeygain account email (required) |
-| `HG_PASS` | — | Honeygain account password (required) |
-| `HG_PROXY_POOL` | — | Comma-separated proxy URLs (required) |
-| `UPSTREAM_PROXY_URL` | — | Single proxy (alt to pool) |
+| `HG_ACCOUNTS` | — | Multi-account pool: `email1:pass1,email2:pass2` |
+| `MAX_DEVICES_PER_ACCOUNT` | `10` | Max devices per honeygain account |
+| `HG_EMAIL` | — | Single-account email (fallback if HG_ACCOUNTS empty) |
+| `HG_PASS` | — | Single-account password (fallback) |
+| `PROXYRISE_ENDPOINT` | — | ProxyRise gateway (host:port) |
+| `PROXYRISE_API_KEY` | — | ProxyRise API key (pgw-...) |
+| `PROXY_TYPE` | `res` | Proxy type: res, stc, mob, dc |
+| `VERIFY_IP` | `true` | Verify egress IP via ipquery.io |
 | `HG_DEVICE_POOL` | [50 built-in] | Custom Android model list |
 | `HG_INSTANCES` | `1` | Number of instances |
-| `TUNNEL_MAX_LIFETIME_SECS` | `300` | Tunnel rotation interval |
+| `TUNNEL_MAX_LIFETIME_SECS` | `86400` | Sticky session hold time (no periodic rotation) |
 | `HG_PROXY_BASE_PORT` | `9150` | First proxy port |
 | `HG_HEALTH_PORT` | `8080` | Health endpoint port |
 | `PROXY_MAX_RETRIES` | `3` | Failures before proxy dead |
@@ -129,17 +158,33 @@ curl http://localhost:8080/health
 
 ---
 
-## Proxy Pool
+## Sticky Sessions (1 Instance = 1 IP)
 
-Multiple proxies → different exit IPs → avoid "Network Overused":
+Each instance gets a unique ProxyRise sticky session:
 
-```bash
-export HG_PROXY_POOL="http://pool-a:token@proxy1.com:443,http://pool-b:token@proxy2.com:443,http://pool-c:token@proxy3.com:443"
+```
+res-{country}-sid-{N}
+  ├── res-us-sid-123456  → static US IP
+  ├── res-uk-sid-234567  → static UK IP
+  ├── res-de-sid-345678  → static DE IP
+  └── res-jp-sid-456789  → static JP IP
 ```
 
-- Instances are distributed round-robin
-- Each proxy has a circuit breaker (3 failures → dead → revive after 60s)
-- Successes reset the failure counter
+- **No two instances share an SID or egress IP** — 100% isolation
+- Session is held until "Network Overused" is detected → kill → rotate SID → NEW IP
+- SID range: 10000 - 999999999 (random, avoids collisions)
+- Sessions stay alive as long as traffic flows
+
+### Rate Limits & Errors
+
+| Status | Meaning | Action |
+|--------|---------|--------|
+| `429` | Per-user cap / backconnect rate limit | Exponential backoff (250ms→8s) |
+| `502/504` | Transient | Exponential backoff |
+| `403` | Data exhausted / SSRF | Don't retry |
+| `407` | Wrong credentials | Fix API key |
+
+**Concurrent connections:** Unlimited by default on ProxyRise; per-user caps available on request. Since each instance uses its own `res-{country}-sid-{N}` username, each has its own per-username budget.
 
 ---
 
@@ -178,24 +223,31 @@ GET / → JSON
 GET /health → JSON
 ```
 
-Response:
+Response (v3.1):
 
 ```json
 {
   "status": "ok",
-  "timestamp": "2025-07-31 04:49:00",
-  "instances": 50,
-  "connected": 42,
-  "starting": 3,
-  "overused": 2,
-  "errors": 2,
-  "dead": 1,
-  "proxies": { "total": 5, "healthy": 4, "dead": 1 },
+  "timestamp": "2025-07-31 17:12:00",
+  "instances": 10,
+  "connected": 8,
+  "starting": 1,
+  "overused": 1,
+  "errors": 0,
+  "dead": 0,
+  "accounts": 2,
+  "max_devices_per_account": 10,
+  "ip_isolation": "100.0%",
+  "unique_ips": 8,
+  "verified_instances": 8,
+  "session_countries": 40,
   "details": [
-    {"id":1, "device":"hgmain-1", "model":"Xiaomi 2311DRK48I Android 16", "state":"Connected", "errors":0, "overuses":0, "uptime_secs":3600}
+    {"id":1, "device":"acct1-1", "model":"Xiaomi 2311DRK48I Android 16", "state":"Connected", "ip":"103.15.xx.xx", "session":"us-sid-123456", "account":"ac***@example.com", "errors":0, "overuses":0, "uptime_secs":3600}
   ]
 }
 ```
+
+> 🔒 Accounts are **masked** (`ac***@example.com`) — passwords are never exposed.
 
 ### Instance States
 
@@ -204,9 +256,9 @@ Response:
 | `Starting` | Proxy binding... |
 | `Connecting` | Awaiting honeygain auth |
 | `Connected` | ✅ Earning! |
-| `Overused` | ⏸ Cooldown (configurable) |
+| `Overused` | ⏸ Cooldown → rotate SID → new IP |
 | `AuthError` | ❌ Check credentials |
-| `ProxyError` | 🔄 Circuit breaker |
+| `ProxyError` | 🔄 Retry / backoff |
 | `ServerDown` | ⏳ Waiting for honeygain API |
 | `Dead` | 🛑 Stop (max errors exceeded) |
 
@@ -229,21 +281,21 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s \
 
 ---
 
-## Legacy: Old rotate-proxy
-
-The old iptables-based transparent proxy is in `../rust-proxy/`. It's **not needed** — the supervisor has proxy rotation built in. Kept for reference only.
-
----
-
 ## Files
 
 | File | Description |
 |------|-------------|
-| `src/main.rs` | Complete supervisor (1348 lines Rust) |
+| `src/main.rs` | Complete supervisor (~1420 lines Rust) |
 | `Cargo.toml` | Dependencies (tokio, serde, chrono, rand, tracing) |
 | `Cargo.lock` | Locked dependency versions |
-| `hg-supervisor.toml` | Config template |
+| `hg-supervisor.toml` | Config template (multi-account) |
 | `README.md` | This file |
-| `target/release/hg-supervisor` | Compiled binary (4.2MB Windows, 2.5MB Linux) |
+| `target/release/hg-supervisor` | Compiled binary (4.4MB Windows, ~2.5MB Linux) |
 | `../Dockerfile` | Multi-stage build (Render) |
-| `../render.yaml` | Render Blueprint |
+| `../render.yaml` | Render Blueprint (HG_ACCOUNTS secret) |
+
+---
+
+## Legacy: Old rotate-proxy
+
+The old iptables-based transparent proxy is in `../rust-proxy/`. It's **not needed** — sticky sessions provide IP isolation natively. Kept for reference only.

@@ -1,5 +1,6 @@
-# Render Blueprint for hg-supervisor v3.0
+# Render Blueprint for hg-supervisor v3.1
 # Sticky Session Mode — 1 Instance = 1 Static IP
+# Multi-Account — honeygain allows ~10 devices per account
 # 100% IP isolation via ProxyRise sticky sessions (res-{country}-sid-{N})
 
 services:
@@ -13,10 +14,19 @@ services:
     envVars:
       - key: HG_INSTANCES
         value: "10"              # Start small, scale up to 50
+      # ── Multi-Account Config ──
+      # Honeygain allows ~10 devices per account.
+      # 50 instances = 5 accounts x 10 devices.
+      # Set HG_ACCOUNTS="email1:pass1,email2:pass2,..." as a Render secret.
+      - key: HG_ACCOUNTS
+        sync: false               # Render secret: email1:pass1,email2:pass2,...
+      # Legacy single-account fallback (used if HG_ACCOUNTS is empty)
       - key: HG_EMAIL
         sync: false               # Render secret
       - key: HG_PASS
         sync: false               # Render secret
+      - key: MAX_DEVICES_PER_ACCOUNT
+        value: "10"              # honeygain policy: 10 devices/account
       # ── ProxyRise Sticky Session Config ──
       - key: PROXYRISE_ENDPOINT
         value: "gw.proxyrise.com:443"
