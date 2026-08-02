@@ -38,7 +38,7 @@ hg-supervisor (4.4MB)
 │   └── ...
 │
 ├── Monitor
-│   ├── stdout parser → state machine
+│   ├── stdout + stderr parser → state machine
 │   ├── overuse detection → rotation signal
 │   └── egress IP verification (ipquery.io, optional)
 │
@@ -147,10 +147,9 @@ curl http://localhost:8080/health
 | `VERIFY_IP` | `true` | Verify egress IP via ipquery.io |
 | `HG_DEVICE_POOL` | [50 built-in] | Custom Android model list |
 | `HG_INSTANCES` | `1` | Number of instances |
-| `TUNNEL_MAX_LIFETIME_SECS` | `86400` | Sticky session hold time (no periodic rotation) |
 | `HG_PROXY_BASE_PORT` | `9150` | First proxy port |
 | `HG_HEALTH_PORT` | `8080` | Health endpoint port |
-| `PROXY_MAX_RETRIES` | `3` | Failures before proxy dead |
+| `PROXY_MAX_RETRIES` | `3` | Transient-error (429/502/503/504) retry cap before circuit break — prevents infinite backoff loops |
 | `OVERUSE_COOLDOWN_SECS` | `300` | Cooldown after overuse |
 | `HG_BIN_PATH` | `./honeygain` | Path to honeygain binary |
 | `HG_LIB_DIR` | — | Path to libs directory |
@@ -179,10 +178,12 @@ res-{country}-sid-{N}
 
 | Status | Meaning | Action |
 |--------|---------|--------|
-| `429` | Per-user cap / backconnect rate limit | Exponential backoff (250ms→8s) |
-| `502/504` | Transient | Exponential backoff |
-| `403` | Data exhausted / SSRF | Don't retry |
+| `429` | Per-user cap / backconnect rate limit | Exponential backoff (250ms→8s), capped at `PROXY_MAX_RETRIES` (default 3) then circuit break |
+| `502/504` | Transient | Exponential backoff, capped at `PROXY_MAX_RETRIES` |
+| `403` | Data exhausted / SSRF / device limit | Don't retry (permanent) |
 | `407` | Wrong credentials | Fix API key |
+
+> **Circuit break (v3.1):** transient errors (429/502/503/504) previously retried **forever**. Now `connect_through_session` counts attempts and bails with `proxy retry limit reached after N attempts` once `PROXY_MAX_RETRIES` is exceeded — the connect fails, the instance's `error_count` increments, and the manager eventually stops it.
 
 **Concurrent connections:** Unlimited by default on ProxyRise; per-user caps available on request. Since each instance uses its own `res-{country}-sid-{N}` username, each has its own per-username budget.
 
@@ -260,7 +261,23 @@ Response (v3.1):
 | `AuthError` | ❌ Check credentials |
 | `ProxyError` | 🔄 Retry / backoff |
 | `ServerDown` | ⏳ Waiting for honeygain API |
+| `DeviceLimit` | 🛑 **Terminal** — account at device cap (403 `user_device_limit_exceeded`), stops, no respawn |
 | `Dead` | 🛑 Stop (max errors exceeded) |
+
+> **Dual-stream monitoring (v3.1):** the honeygain binary writes ALL its diagnostics to **stderr** (banner, TOU, auth errors); stdout is silent. `spawn_honeygain` pipes both streams, and the supervisor now runs a monitor task per stream, routing every line through the same `classify_output` state machine. Previously only stdout was read — classification never fired and the child was silently restarted.
+
+> **DeviceLimit classification:** the line `Error processing authorisation (user_device_limit_exceeded)` (the binary's rendering of the backend 403 when the account exceeds its device cap) is matched BEFORE the generic `AuthError` pattern. It saturates `error_count` so the manager stops the instance instead of retrying every ~6s.
+
+---
+
+## Important: the honeygain binary bypasses HTTP_PROXY (verified 2026-08-01)
+
+> **The bundled honeygain CLI ignores `HTTP_PROXY`/`HTTPS_PROXY` entirely.** It uses **QUIC** (libmsquic, bundled in `libs/`) and dials `api.honeygain.com` directly — proof: running it with `HTTP_PROXY=http://127.0.0.1:9999` (dead port) produces byte-identical output to the no-proxy baseline.
+>
+> Consequences:
+> - The supervisor's CONNECT proxy on `127.0.0.1:9150+` serves its **own** HTTP clients (health checks, other tools), NOT the honeygain binary.
+> - Egress IP isolation for the binary comes from **network-level** routing; you cannot force it through an HTTP proxy via env vars.
+> - A device-limit or invalid-login error printed by the binary is therefore the **real backend's** response (e.g. the 403 `user_device_limit_exceeded` this account returns at 13/10 devices).
 
 ---
 

@@ -1,5 +1,6 @@
 # Rust
 supervisor/target/
+rust-proxy/target/
 **/*.rs.bk
 
 # Environment

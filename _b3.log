@@ -1,0 +1,2 @@
+warning: function `spawn_plain_http_server` is never used
+warning: `rotate-proxy` (bin "rotate-proxy" test) generated 1 warning

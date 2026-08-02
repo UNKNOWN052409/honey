@@ -1,0 +1,166 @@
+fn keys: ['branches', 'mcdc_records', 'count', 'filenames', 'name', 'regions']
+{
+ "branches": [],
+ "mcdc_records": [],
+ "count": 6,
+ "filenames": [
+  "/mnt/c/Users/Unkno/Videos/New folder/honeygain/supervisor/src/main.rs"
+ ],
+ "name": "_RNCNCNvNtCsk7AmL81010j_13hg_supervisor5tests19run_test_http_proxy00B7_",
+ "regions": [
+  [
+   2004,
+   33,
+   2004,
+   34,
+   6,
+   0,
+   0,
+   0
+  ],
+  [
+   2005,
+   18,
+   2005,
+   23,
+   6,
+   0,
+   0,
+   0
+  ],
+  [
+   2005,
+   30,
+   2005,
+   38,
+   6,
+   0,
+   0,
+   0
+  ],
+  [
+   2005,
+   30,
+   2005,
+   53,
+   6,
+   0,
+   0,
+   0
+  ],
+  [
+   2005,
+   54,
+   2005,
+   60,
+   6,
+   0,
+   0,
+   0
+  ],
+  [
+   2006,
+   17,
+   2006,
+   24,
+   6,
+   0,
+   0,
+   0
+  ],
+  [
+   2006,
+   27,
+   2006,
+   31,
+   6,
+   0,
+   0,
+   0
+  ],
+  [
+   
+
+fn keys: ['branches', 'mcdc_records', 'count', 'filenames', 'name', 'regions']
+{
+ "branches": [],
+ "mcdc_records": [],
+ "count": 2,
+ "filenames": [
+  "/mnt/c/Users/Unkno/Videos/New folder/honeygain/supervisor/src/main.rs"
+ ],
+ "name": "_RNCNCNvNtCsk7AmL81010j_13hg_supervisor5tests20run_flaky_http_proxy00B7_",
+ "regions": [
+  [
+   2674,
+   33,
+   2674,
+   34,
+   2,
+   0,
+   0,
+   0
+  ],
+  [
+   2675,
+   17,
+   2675,
+   28,
+   2,
+   0,
+   0,
+   0
+  ],
+  [
+   2675,
+   31,
+   2675,
+   35,
+   2,
+   0,
+   0,
+   0
+  ],
+  [
+   2677,
+   22,
+   2677,
+   27,
+   5,
+   0,
+   0,
+   0
+  ],
+  [
+   2677,
+   40,
+   2677,
+   48,
+   6,
+   0,
+   0,
+   0
+  ],
+  [
+   2677,
+   49,
+   2677,
+   55,
+   6,
+   0,
+   0,
+   0
+  ],
+  [
+   2677,
+   58,
+   2677,
+   63,
+   6,
+   0,
+   0,
+   0
+  ],
+  [
+  
+
