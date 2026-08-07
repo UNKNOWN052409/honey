@@ -23,3 +23,6 @@ lib64/
 # OS
 Thumbs.db
 .DS_Store
+
+# Nested duplicate clone of this repo (local artifact — do not commit)
+/honey/

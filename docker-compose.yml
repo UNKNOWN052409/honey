@@ -34,8 +34,8 @@ services:
         condition: service_started
     network_mode: "service:rotate-proxy"
     command:
-      - -email=hgmain.fuldgu@proton.me
-      - -pass=Moin@748655
+      - -email=${HG_EMAIL}
+      - -pass=${HG_PASS}
       - -device=HG-1
       - -tou-accept
 
@@ -48,8 +48,8 @@ services:
         condition: service_started
     network_mode: "service:rotate-proxy"
     command:
-      - -email=hgmain.fuldgu@proton.me
-      - -pass=Moin@748655
+      - -email=${HG_EMAIL}
+      - -pass=${HG_PASS}
       - -device=HG-2
       - -tou-accept
 
@@ -62,8 +62,8 @@ services:
         condition: service_started
     network_mode: "service:rotate-proxy"
     command:
-      - -email=hgmain.fuldgu@proton.me
-      - -pass=Moin@748655
+      - -email=${HG_EMAIL}
+      - -pass=${HG_PASS}
       - -device=HG-3
       - -tou-accept
 
@@ -76,8 +76,8 @@ services:
         condition: service_started
     network_mode: "service:rotate-proxy"
     command:
-      - -email=hgmain.fuldgu@proton.me
-      - -pass=Moin@748655
+      - -email=${HG_EMAIL}
+      - -pass=${HG_PASS}
       - -device=HG-4
       - -tou-accept
 
@@ -90,8 +90,8 @@ services:
         condition: service_started
     network_mode: "service:rotate-proxy"
     command:
-      - -email=hgmain.fuldgu@proton.me
-      - -pass=Moin@748655
+      - -email=${HG_EMAIL}
+      - -pass=${HG_PASS}
       - -device=HG-5
       - -tou-accept
 
@@ -104,8 +104,8 @@ services:
         condition: service_started
     network_mode: "service:rotate-proxy"
     command:
-      - -email=hgmain.fuldgu@proton.me
-      - -pass=Moin@748655
+      - -email=${HG_EMAIL}
+      - -pass=${HG_PASS}
       - -device=HG-6
       - -tou-accept
 
@@ -118,8 +118,8 @@ services:
         condition: service_started
     network_mode: "service:rotate-proxy"
     command:
-      - -email=hgmain.fuldgu@proton.me
-      - -pass=Moin@748655
+      - -email=${HG_EMAIL}
+      - -pass=${HG_PASS}
       - -device=HG-7
       - -tou-accept
 
@@ -132,7 +132,7 @@ services:
         condition: service_started
     network_mode: "service:rotate-proxy"
     command:
-      - -email=hgmain.fuldgu@proton.me
-      - -pass=Moin@748655
+      - -email=${HG_EMAIL}
+      - -pass=${HG_PASS}
       - -device=HG-8
       - -tou-accept

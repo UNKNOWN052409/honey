@@ -596,7 +596,31 @@ async fn handle_connection(
         let tgt_port: u16 = hp.get(1).and_then(|p| p.parse().ok()).unwrap_or(443);
         handle_connect_proxy(cid, client, &tgt_host, tgt_port, upstreams, tunnel_lifetime).await;
     } else {
-        handle_http_forward(cid, client, &client_hdr_raw, "unknown", 80, upstreams).await;
+        // Parse host:port from the request URL (e.g. "GET http://example.com:8080/path HTTP/1.1")
+        let mut tgt_host = String::new();
+        let mut tgt_port: u16 = 80;
+        if let Some(url_part) = first_line.split_whitespace().nth(1) {
+            let url = url_part.trim_start_matches("http://").trim_start_matches("https://");
+            if let Some(slash_pos) = url.find('/') {
+                let host_port = &url[..slash_pos];
+                if let Some(colon_pos) = host_port.rfind(':') {
+                    tgt_host = host_port[..colon_pos].to_string();
+                    tgt_port = host_port[colon_pos+1..].parse().unwrap_or(80);
+                } else {
+                    tgt_host = host_port.to_string();
+                }
+            } else if let Some(colon_pos) = url.rfind(':') {
+                tgt_host = url[..colon_pos].to_string();
+                tgt_port = url[colon_pos+1..].parse().unwrap_or(80);
+            } else {
+                tgt_host = url.to_string();
+            }
+        }
+        if !tgt_host.is_empty() && tgt_host != "unknown" {
+            handle_http_forward(cid, client, &client_hdr_raw, &tgt_host, tgt_port, upstreams).await;
+        } else {
+            log(&format!("[{}][ERR] could not parse host from HTTP request: {}", cid, first_line));
+        }
     }
 }
 
@@ -626,7 +650,10 @@ async fn main() {
     log("[INIT] Starting rotate-proxy...");
 
     let proxy_urls_str = env::var("UPSTREAM_PROXY_URL")
-        .unwrap_or_else(|_| "http://res-any:pgw-435fb460e7faae45f5989dcd48cf235ca35897c3e51788a1@gw.proxyrise.com:443".to_string());
+        .unwrap_or_else(|_| {
+            log("[INIT] WARNING: UPSTREAM_PROXY_URL not set and no default configured. Running in DIRECT mode.");
+            String::new()
+        });
 
     let listen_addr = env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     let tunnel_lifetime: u64 = env::var("TUNNEL_MAX_LIFETIME_SECS")
@@ -947,17 +974,6 @@ mod tests {
     }
 
     /// SOCKS5 mock: completes negotiation + CONNECT then tunnels to a target.
-
-    #[tokio::test]
-    async fn socks5_connect_no_auth_success() {
-        let (h, p) = spawn_socks5_mock(false, true).await;
-        let up = cfg_socks5(&h, p, "", "");
-        let mut s = socks5_connect(&up, "example.com", 443).await.unwrap();
-        s.write_all(b"ping").await.unwrap();
-        let mut buf = [0u8; 4];
-        s.read_exact(&mut buf).await.unwrap();
-        assert_eq!(&buf, b"ping");
-    }
 
     #[tokio::test]
     async fn socks5_connect_no_auth_success() {
