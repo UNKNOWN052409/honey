@@ -1,50 +1,63 @@
-# hg-supervisor v3.1 configuration
-# Sticky Session Mode — 1 Instance = 1 Static IP
-# Multi-Account — honeygain allows ~10 devices per account
+# hg-supervisor v4.0 configuration — Dual-App Edition
+# Honeygain + Pawns.app in a single supervisor
 # For Render deployment — use env vars for credentials
 
+# ── Shared Config ──
+health_port = 8080
+
+# ── Honeygain Section ──
+# All fields from the legacy flat format work here.
+# If this section is absent, the supervisor falls back to legacy flat format.
+[honeygain]
+enabled = true
 instances = 10
 
-# ── Multi-Account Config ──
+# Multi-Account Config
 # Honeygain allows ~10 devices per account (different networks).
 # 50 instances = 5 accounts x 10 devices.
-# Prefer HG_ACCOUNTS env var on Render: HG_ACCOUNTS="email1:pass1,email2:pass2,..."
+# Prefer HG_ACCOUNTS env var: HG_ACCOUNTS="email1:pass1,email2:pass2,..."
 # accounts = [
 #   { email = "acct1@example.com", pass = "pass1" },
 #   { email = "acct2@example.com", pass = "pass2" },
 # ]
-# If `accounts` is empty, falls back to email/pass below (single account mode).
 email = "your_email@example.com"
 pass = "your_password"
-# Max devices per honeygain account (honeygain policy: 10)
 max_devices_per_account = 10
 
-# ── ProxyRise Sticky Session Config ──
+# ProxyRise Sticky Session Config
 # Each instance gets a unique res-{country}-sid-{N} sticky session
-# 40 different countries for maximum IP diversity
 proxyrise_endpoint = "gw.proxyrise.com:443"
 proxyrise_api_key = "pgw-your-api-key-here"
-proxy_type = "res"          # res, stc, mob, dc
+proxy_type = "res"
 
-# ── IP Verification ──
-# Calls ipquery.io through each instance's proxy to verify egress IP
+# IP Verification
 verify_ip = true
 
-# ── Overuse Handling ──
-# When "Network Overused" detected, rotate to new sticky session (new IP)
+# Overuse Handling
 overuse_cooldown_secs = 300
 
-# ── Instance Resources ──
-# 0.1 core / 512MB supports ~10-15 instances
-# Each honeygain subprocess uses ~30-50MB RAM
+# Instance Resources
 proxy_base_port = 9150
-health_port = 8080
 
-# ── Proxy Failure Handling ──
-# Exponential backoff on 429/502/503/504 (250ms → 500ms → 1s → ... 8s)
+# Proxy Failure Handling
 proxy_max_retries = 3
-proxy_retry_delay_secs = 60
 
-# ── Paths (adjust for local dev) ──
+# Paths (adjust for local dev)
 honeygain_bin = "./honeygain"
 lib_dir = "./libs"
+
+# ── Pawns.app Section ──
+# Pawns.app CLI requires only email, password, and device identity.
+# Application layer: NO proxy configuration — pawns-cli is completely proxy-unaware.
+# Network layer: Docker containers route through rotate-proxy-pawns via iptables
+# transparent proxy (same architecture as Honeygain's rotate-proxy).
+# Each Pawns instance gets a unique residential IP at the container/network level.
+[pawns]
+enabled = false
+instances = 3
+email = "your_pawns_email@example.com"
+password = "your_pawns_password"
+accept_tos = true
+pawns_bin = "./pawns-cli"
+max_consecutive_errors = 5
+restart_delay_secs = 5

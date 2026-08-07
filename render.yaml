@@ -1,9 +1,11 @@
-# Render Blueprint for hg-supervisor v3.1
-# Sticky Session Mode — 1 Instance = 1 Static IP
-# Multi-Account — honeygain allows ~10 devices per account
-# 100% IP isolation via ProxyRise sticky sessions (res-{country}-sid-{N})
+# Render Blueprint for hg-supervisor v4.0 — Dual-App Edition
+# Honeygain + Pawns.app in a single supervisor binary
+# Multi-Account for Honeygain, single-account for Pawns.app
+# 100% IP isolation via ProxyRise sticky sessions (Honeygain)
+# Network-level transparent proxy via iptables (Pawns)
 
 services:
+  # ── Honeygain Supervisor ──
   - type: web
     name: hg-supervisor-1
     env: docker
@@ -13,33 +15,55 @@ services:
     healthCheckPath: /health
     envVars:
       - key: HG_INSTANCES
-        value: "10"              # Start small, scale up to 50
+        value: "10"
       # ── Multi-Account Config ──
       # Honeygain allows ~10 devices per account.
-      # 50 instances = 5 accounts x 10 devices.
       # Set HG_ACCOUNTS="email1:pass1,email2:pass2,..." as a Render secret.
       - key: HG_ACCOUNTS
-        sync: false               # Render secret: email1:pass1,email2:pass2,...
-      # Legacy single-account fallback (used if HG_ACCOUNTS is empty)
+        sync: false
+      # Legacy single-account fallback
       - key: HG_EMAIL
-        sync: false               # Render secret
+        sync: false
       - key: HG_PASS
-        sync: false               # Render secret
+        sync: false
       - key: MAX_DEVICES_PER_ACCOUNT
-        value: "10"              # honeygain policy: 10 devices/account
+        value: "10"
       # ── ProxyRise Sticky Session Config ──
       - key: PROXYRISE_ENDPOINT
         value: "gw.proxyrise.com:443"
       - key: PROXYRISE_API_KEY
-        sync: false               # Render secret (pgw-...)
+        sync: false
       - key: PROXY_TYPE
-        value: "res"              # res, stc, mob, dc
+        value: "res"
       # ── IP Verification ──
       - key: VERIFY_IP
-        value: "true"             # Verify egress IP on startup
+        value: "true"
       # ── Overuse Handling ──
       - key: OVERUSE_COOLDOWN_SECS
-        value: "300"              # 5 min cooldown after overuse
+        value: "300"
       # ── Logging ──
+      - key: RUST_LOG
+        value: "info"
+
+  # ── Pawns.app Supervisor (same binary, Pawns config only) ──
+  # Network layer: iptables transparent proxy routes all outbound traffic
+  # through dedicated rotate-proxy-pawns container. pawns-cli is completely
+  # proxy-unaware — no HTTP_PROXY, no proxy flags, no application-level config.
+  - type: web
+    name: pawns-supervisor
+    env: docker
+    dockerfilePath: ./Dockerfile.pawns
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PAWNS_INSTANCES
+        value: "5"
+      - key: PAWNS_EMAIL
+        sync: false
+      - key: PAWNS_PASSWORD
+        sync: false
+      - key: PAWNS_ACCEPT_TOS
+        value: "true"
       - key: RUST_LOG
         value: "info"

@@ -136,3 +136,105 @@ services:
       - -pass=${HG_PASS}
       - -device=HG-8
       - -tou-accept
+
+  # ── Pawns.app instances (1 proxy per instance, complete network isolation) ──
+  # Each pawns-N gets a dedicated rotate-proxy-pawns-N with its own ProxyRise
+  # sticky session and unique residential exit IP. pawns-cli is completely
+  # proxy-unaware — all routing is transparent via iptables in the proxy container.
+  # Use generate-compose.py to scale: PAWNS_INSTANCES=10 python generate-compose.py
+
+  rotate-proxy-pawns-1:
+    image: honeygain-rotate-proxy:latest
+    container_name: rotate-proxy-pawns-1
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_local_port_range=10000 65535
+      - net.ipv4.tcp_fin_timeout=5
+    environment:
+      - UPSTREAM_PROXY_URL=socks5://res-${PAWNS_COUNTRY:-us}-sid-1:${PAWNS_PROXYRISE_PASSWORD}@${PROXYRISE_ENDPOINT:-gw.proxyrise.com:443}
+      - LISTEN_ADDR=0.0.0.0:8080
+      - TUNNEL_MAX_LIFETIME_SECS=600
+
+  pawns-1:
+    image: iproyal/pawns-cli:latest
+    container_name: pawns-1
+    restart: unless-stopped
+    depends_on:
+      rotate-proxy-pawns-1:
+        condition: service_started
+    network_mode: "service:rotate-proxy-pawns-1"
+    command:
+      - -email=${PAWNS_EMAIL}
+      - -password=${PAWNS_PASSWORD}
+      - -device-name=pawns-dev1
+      - -device-id=1
+      - -accept-tos
+
+  rotate-proxy-pawns-2:
+    image: honeygain-rotate-proxy:latest
+    container_name: rotate-proxy-pawns-2
+    restart: unless-stopped
+    ports:
+      - "8083:8080"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_local_port_range=10000 65535
+      - net.ipv4.tcp_fin_timeout=5
+    environment:
+      - UPSTREAM_PROXY_URL=socks5://res-${PAWNS_COUNTRY:-us}-sid-2:${PAWNS_PROXYRISE_PASSWORD}@${PROXYRISE_ENDPOINT:-gw.proxyrise.com:443}
+      - LISTEN_ADDR=0.0.0.0:8080
+      - TUNNEL_MAX_LIFETIME_SECS=600
+
+  pawns-2:
+    image: iproyal/pawns-cli:latest
+    container_name: pawns-2
+    restart: unless-stopped
+    depends_on:
+      rotate-proxy-pawns-2:
+        condition: service_started
+    network_mode: "service:rotate-proxy-pawns-2"
+    command:
+      - -email=${PAWNS_EMAIL}
+      - -password=${PAWNS_PASSWORD}
+      - -device-name=pawns-dev2
+      - -device-id=2
+      - -accept-tos
+
+  rotate-proxy-pawns-3:
+    image: honeygain-rotate-proxy:latest
+    container_name: rotate-proxy-pawns-3
+    restart: unless-stopped
+    ports:
+      - "8084:8080"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_local_port_range=10000 65535
+      - net.ipv4.tcp_fin_timeout=5
+    environment:
+      - UPSTREAM_PROXY_URL=socks5://res-${PAWNS_COUNTRY:-us}-sid-3:${PAWNS_PROXYRISE_PASSWORD}@${PROXYRISE_ENDPOINT:-gw.proxyrise.com:443}
+      - LISTEN_ADDR=0.0.0.0:8080
+      - TUNNEL_MAX_LIFETIME_SECS=600
+
+  pawns-3:
+    image: iproyal/pawns-cli:latest
+    container_name: pawns-3
+    restart: unless-stopped
+    depends_on:
+      rotate-proxy-pawns-3:
+        condition: service_started
+    network_mode: "service:rotate-proxy-pawns-3"
+    command:
+      - -email=${PAWNS_EMAIL}
+      - -password=${PAWNS_PASSWORD}
+      - -device-name=pawns-dev3
+      - -device-id=3
+      - -accept-tos
