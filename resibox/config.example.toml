@@ -13,6 +13,15 @@ verify_url = "http://ip-api.com/json/?fields=query,countryCode"
 verify_ip_field = "query"
 verify_country_field = "countryCode"
 verify_direct_url = "http://ip-api.com/json/?fields=query,countryCode"
+# Sticky-session pinning: tiny heartbeat through the SAME proxy keeps the
+# assigned residential IP bound to this session as long as possible.
+keepalive_secs = 30
+keepalive_url = "http://canhazip.com/"
+# Sustained overuse signals needed before an authorized sticky-id rotation
+overuse_rotate_threshold = 12
+# Ramp containers one-by-one (gateway-friendly bulk starts)
+startup_stagger_secs = 0
+
 # enforcement: "auto" (netns if root, else userspace) | "netns" | "userspace"
 enforcement = "auto"
 # Consecutive watchdog failures before a container is marked BLOCKED
@@ -50,3 +59,18 @@ honeygain_device = "HG-FR-B"
 pawns_email = "other@example.com"
 pawns_pass = "secret2"
 pawns_device_name = "PB-FR-B"
+
+# ── Multi-endpoint verifier fallback (recommended for 24/7 runs) ──
+# [[general.verify_endpoints]]
+# url = "https://api.ipquery.io/?format=json"
+# ip_field = "ip"
+# country_field = "location.country_code"
+#
+# [[general.verify_endpoints]]
+# url = "https://ipwho.is/"
+# ip_field = "ip"
+# country_field = "country_code"
+
+# ── Bulk generation: 100s of containers ──
+# python3 gen-config.py --count 100 --stagger 5 --out config-100.toml
+# See SCALING.md for the full single-wifi scaling guide.
