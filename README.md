@@ -1,5 +1,10 @@
 # 🍯 Honeygain Supervisor — v3.0 Sticky Session Edition
 
+> **NEW: [`resibox/`](./resibox) — Rust-Based Isolated Residential IP Container Runtime**
+> Strict per-container network-namespace jails, one assigned residential proxy each,
+> pre-flight IP verification, watchdog fail-closed, DNS-over-proxy, runs Honeygain
+> **and** Pawns.app CLI together. See [resibox/README.md](./resibox/README.md).
+
 > **Run 50+ honeygain instances on Render with 100% IP isolation.**
 > Every instance gets a UNIQUE static IP via ProxyRise sticky sessions.
 > 1 container = 1 IP. No sharing. Static until "Network Overused".

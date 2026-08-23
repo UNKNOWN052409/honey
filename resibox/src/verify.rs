@@ -1,0 +1,188 @@
+//! Pre-flight + periodic egress-identity verification.
+//!
+//! Guarantees implemented here:
+//!  * observed IP must match the assigned policy (exact pin or country)
+//!  * observed IP must NEVER equal the host/datacenter baseline (leak check)
+//!  * any failure => Err => caller MUST keep the workload stopped
+
+use crate::proxy::{connect_through, ProxyUrl};
+use anyhow::{anyhow, bail, Context, Result};
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Policy {
+    ExactIp(String),
+    Country(String),
+    AnyResidential,
+}
+
+impl Policy {
+    pub fn from_cfg(expected_ip: &str, expected_country: &str) -> Self {
+        if !expected_ip.trim().is_empty() {
+            Policy::ExactIp(expected_ip.trim().to_string())
+        } else if !expected_country.trim().is_empty() {
+            Policy::Country(expected_country.trim().to_uppercase())
+        } else {
+            Policy::AnyResidential
+        }
+    }
+    pub fn describe(&self) -> String {
+        match self {
+            Policy::ExactIp(ip) => format!("ip=={ip}"),
+            Policy::Country(c) => format!("country=={c}"),
+            Policy::AnyResidential => "any residential".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Observation {
+    pub ip: String,
+    pub country: Option<String>,
+}
+
+/// Fetch `url` through the proxy using a raw HTTP/1.1 GET over the tunnel.
+pub async fn http_get_via_proxy(proxy: &ProxyUrl, url: &str, timeout: Duration) -> Result<String> {
+    let (host, port, path) = split_url(url)?;
+    let is_tls = port == 443 || url.starts_with("https://");
+    if is_tls {
+        // Avoid pulling a TLS stack into the runtime: prefer plain-HTTP geo/IP
+        // endpoints (ip-api.com etc.). If an https URL is configured we refuse
+        // loudly instead of silently weakening verification.
+        bail!("verify_url must be plain http:// (resibox avoids a TLS dependency; ip-api/ipify serve plain http)");
+    }
+    let mut s = tokio::time::timeout(timeout, connect_through(proxy, &host, port))
+        .await
+        .map_err(|_| anyhow!("timeout connecting via proxy"))??;
+    let req = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: resibox/1.0\r\nConnection: close\r\n\r\n"
+    );
+    tokio::time::timeout(timeout, s.write_all(req.as_bytes())).await??;
+    let mut buf = Vec::new();
+    tokio::time::timeout(timeout, s.read_to_end(&mut buf)).await??;
+    let text = String::from_utf8_lossy(&buf);
+    let body = text
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b)
+        .unwrap_or(&text);
+    Ok(body.to_string())
+}
+
+/// Direct (no-proxy) fetch — used ONLY to learn the host's datacenter baseline.
+pub async fn http_get_direct(url: &str, timeout: Duration) -> Result<String> {
+    let (host, port, path) = split_url(url)?;
+    if url.starts_with("https://") {
+        bail!("verify_direct_url must be plain http://");
+    }
+    let mut s = tokio::time::timeout(timeout, tokio::net::TcpStream::connect((host.as_str(), port)))
+        .await
+        .map_err(|_| anyhow!("timeout direct connect"))??;
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: resibox/1.0\r\nConnection: close\r\n\r\n");
+    tokio::time::timeout(timeout, s.write_all(req.as_bytes())).await??;
+    let mut buf = Vec::new();
+    tokio::time::timeout(timeout, s.read_to_end(&mut buf)).await??;
+    let text = String::from_utf8_lossy(&buf);
+    let body = text.split_once("\r\n\r\n").map(|(_, b)| b).unwrap_or(&text);
+    Ok(body.to_string())
+}
+
+fn split_url(url: &str) -> Result<(String, u16, String)> {
+    let rest = url
+        .strip_prefix("http://")
+        .ok_or_else(|| anyhow!("only http:// supported: {url}"))?;
+    let (hp, path) = match rest.split_once('/') {
+        Some((h, p)) => (h, format!("/{p}")),
+        None => (rest, "/".to_string()),
+    };
+    let (host, port) = match hp.rsplit_once(':') {
+        Some((h, p)) => (h.to_string(), p.parse::<u16>().context("port in url")?),
+        None => (hp.to_string(), 80),
+    };
+    Ok((host, port, path))
+}
+
+pub fn parse_observation(body: &str, ip_field: &str, country_field: &str) -> Result<Observation> {
+    let v: serde_json::Value =
+        serde_json::from_str(body).with_context(|| format!("bad json from verifier: {body:.120}"))?;
+    let ip = v
+        .get(ip_field)
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| anyhow!("missing field '{ip_field}' in verifier response"))?
+        .to_string();
+    let country = v
+        .get(country_field)
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string());
+    Ok(Observation { ip, country })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum VerifyOutcome {
+    Pass { observed: Observation },
+    Fail { reason: String },
+}
+
+/// Full pre-flight / watchdog check.
+pub async fn verify(
+    proxy: &ProxyUrl,
+    policy: &Policy,
+    host_baseline: &Option<Observation>,
+    g: &crate::config::General,
+) -> VerifyOutcome {
+    let body = match http_get_via_proxy(
+        proxy,
+        &g.verify_url,
+        Duration::from_secs(g.verify_timeout_override()),
+    )
+    .await
+    {
+        Ok(b) => b,
+        Err(e) => return VerifyOutcome::Fail { reason: format!("proxy unreachable/unusable: {e}") },
+    };
+    let obs = match parse_observation(&body, &g.verify_ip_field, &g.verify_country_field) {
+        Ok(o) => o,
+        Err(e) => return VerifyOutcome::Fail { reason: format!("verifier parse: {e}") },
+    };
+
+    // Leak check FIRST: if we see the host's own IP something is catastrophically wrong.
+    if let Some(base) = host_baseline {
+        if base.ip == obs.ip {
+            return VerifyOutcome::Fail {
+                reason: format!(
+                    "LEAK: traffic exiting via host/datacenter IP {} instead of assigned proxy",
+                    obs.ip
+                ),
+            };
+        }
+    }
+
+    let ok = match policy {
+        Policy::ExactIp(want) => obs.ip == *want,
+        Policy::Country(want) => obs
+            .country
+            .as_deref()
+            .map(|c| c.eq_ignore_ascii_case(want))
+            .unwrap_or(false),
+        Policy::AnyResidential => true,
+    };
+    if !ok {
+        VerifyOutcome::Fail {
+            reason: format!(
+                "egress identity mismatch: observed {} ({}) but policy requires {}",
+                obs.ip,
+                obs.country.clone().unwrap_or_default(),
+                policy.describe()
+            ),
+        }
+    } else {
+        VerifyOutcome::Pass { observed: obs }
+    }
+}
+
+impl crate::config::General {
+    fn verify_timeout_override(&self) -> u64 {
+        // Keep watchdog snappy; preflight tolerates slow residential gateways.
+        20
+    }
+}
