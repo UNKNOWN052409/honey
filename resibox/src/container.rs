@@ -223,8 +223,20 @@ pub async fn run_container(cs: Arc<ContainerState>, g: Arc<General>, baseline: O
             sleep_backoff(g.verify_interval_secs).await;
 
             // If both children died on their own, restart via outer preflight.
-            let hg_alive = procs.hg.as_mut().map(|c| c.try_wait().ok().flatten().is_none());
-            let pb_alive = procs.pawns.as_mut().map(|c| c.try_wait().ok().flatten().is_none());
+            let hg_alive = procs.hg.as_mut().map(|c| {
+                let st = c.try_wait().ok().flatten();
+                if let Some(st) = &st {
+                    tracing::warn!(container = %cs.cfg.name, app="honeygain", ?st, "child exited");
+                }
+                st.is_none()
+            });
+            let pb_alive = procs.pawns.as_mut().map(|c| {
+                let st = c.try_wait().ok().flatten();
+                if let Some(st) = &st {
+                    tracing::warn!(container = %cs.cfg.name, app="pawns", ?st, "child exited");
+                }
+                st.is_none()
+            });
 
             match verify(&proxy, &ep.policy, &baseline, &g).await {
                 VerifyOutcome::Pass { observed } => {
@@ -419,10 +431,10 @@ fn all_proxy_env(cs: &Arc<ContainerState>) -> String { cs.cfg.proxy.clone() }
 
 async fn kill_apps(procs: &mut Procs) {
     for c in [&mut procs.hg, &mut procs.pawns] {
-        if let Some(ch) = c {
+        if let Some(mut ch) = c.take() {
             let _ = ch.kill().await;
+            let _ = ch.wait().await; // reap — no zombies
         }
-        *c = None;
     }
 }
 

@@ -130,15 +130,31 @@ pub async fn verify(
     host_baseline: &Option<Observation>,
     g: &crate::config::General,
 ) -> VerifyOutcome {
-    let body = match http_get_via_proxy(
-        proxy,
-        &g.verify_url,
-        Duration::from_secs(g.verify_timeout_override()),
-    )
-    .await
-    {
-        Ok(b) => b,
-        Err(e) => return VerifyOutcome::Fail { reason: format!("proxy unreachable/unusable: {e}") },
+    // Residential gateways are flaky under load: retry transient failures
+    // before declaring the endpoint dead.
+    let mut body = None;
+    let mut last_err = String::new();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+        match http_get_via_proxy(
+            proxy,
+            &g.verify_url,
+            Duration::from_secs(g.verify_timeout_override()),
+        )
+        .await
+        {
+            Ok(b) => {
+                body = Some(b);
+                break;
+            }
+            Err(e) => last_err = format!("{e}"),
+        }
+    }
+    let body = match body {
+        Some(b) => b,
+        None => return VerifyOutcome::Fail { reason: format!("proxy unreachable/unusable: {last_err}") },
     };
     let obs = match parse_observation(&body, &g.verify_ip_field, &g.verify_country_field) {
         Ok(o) => o,
@@ -182,7 +198,7 @@ pub async fn verify(
 
 impl crate::config::General {
     fn verify_timeout_override(&self) -> u64 {
-        // Keep watchdog snappy; preflight tolerates slow residential gateways.
-        20
+        // Per-attempt timeout; residential gateways can be slow under load.
+        25
     }
 }
