@@ -5,3 +5,4 @@ resibox/countries.txt
 *.txt
 !resibox/README.md
 !resibox/SCALING.md
+.gstack/
