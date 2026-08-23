@@ -225,8 +225,26 @@ pub async fn run_container(cs: Arc<ContainerState>, g: Arc<General>, baseline: O
         }
 
         // ---- WATCHDOG ------------------------------------------------------
+        // Sleep is split into keep-alive chunks: each tiny request goes out
+        // through the SAME sticky url, holding the exit-IP binding warm so
+        // the provider keeps handing us the same residential IP.
         loop {
-            sleep_backoff(g.verify_interval_secs).await;
+            {
+                let ka = g.keepalive_secs.clamp(5, 300);
+                let total = g.verify_interval_secs.max(ka);
+                let mut slept = 0u64;
+                while slept < total {
+                    let chunk = ka.min(total - slept);
+                    tokio::time::sleep(Duration::from_secs(chunk)).await;
+                    slept += chunk;
+                    let _ = crate::verify::http_get_via_proxy(
+                        &proxy,
+                        &g.keepalive_url,
+                        Duration::from_secs(8),
+                    )
+                    .await;
+                }
+            }
 
             // DEVICE CONFLICT: old session still registered server-side.
             // Rotate to a persisted-but-fresh device id and recycle.
@@ -244,7 +262,7 @@ pub async fn run_container(cs: Arc<ContainerState>, g: Arc<General>, baseline: O
             // PROVIDER SIGNAL: too many "Network Overused" hits => this
             // sticky endpoint has gone sour. Rotate to a FRESH session IP
             // (authorized by provider behavior), then FULL preflight again.
-            if *cs.overuse_hits.lock().unwrap() >= 5 {
+            if *cs.overuse_hits.lock().unwrap() >= g.overuse_rotate_threshold {
                 if let Some(new_url) = rotate_sticky(&ep.url) {
                     tracing::warn!(container = %cs.cfg.name,
                                    "OVERUSE ROTATION: switching to fresh sticky session");
@@ -380,7 +398,7 @@ async fn rotate_authorized(
 
 async fn build_jail(cs: &Arc<ContainerState>, proxy: &ProxyUrl) -> Result<NetNs> {
     let idx = cs_index(&cs.cfg.name);
-    let ips = crate::netns::resolve_proxy_ips(&proxy.host).await?;
+    let ips = crate::netns::resolve_proxy_ips(&proxy.host)?;
     NetNs::create(&cs.cfg.name, idx, &proxy.host, proxy.port, &ips).await
 }
 

@@ -27,6 +27,15 @@ pub struct General {
     /// Seconds between consecutive container startups (gateway-friendly ramp).
     #[serde(default)]
     pub startup_stagger_secs: u64,
+    /// Tiny request interval that keeps the sticky session binding warm.
+    #[serde(default = "d_ka")]
+    pub keepalive_secs: u64,
+    /// Cheap endpoint used only for keep-alive pings.
+    #[serde(default = "d_ka_url")]
+    pub keepalive_url: String,
+    /// Overuse signal count that authorizes a sticky-id rotation.
+    #[serde(default = "d_overuse_thr")]
+    pub overuse_rotate_threshold: u32,
     #[serde(default = "d_ip_field")]
     pub verify_ip_field: String,
     #[serde(default = "d_country_field")]
@@ -107,6 +116,9 @@ fn d_ip_field() -> String { "query".into() }
 fn d_country_field() -> String { "countryCode".into() }
 fn d_maxfail() -> u32 { 3 }
 fn d_resolvers() -> Vec<String> { vec!["9.9.9.9:53".into(), "1.1.1.1:53".into()] }
+fn d_ka() -> u64 { 30 }
+fn d_ka_url() -> String { "http://canhazip.com/".into() }
+fn d_overuse_thr() -> u32 { 12 }
 fn d_general() -> General {
     General {
         health_port: d_health(),
@@ -115,6 +127,9 @@ fn d_general() -> General {
         verify_urls: vec![],
         verify_endpoints: vec![],
         startup_stagger_secs: 0,
+        keepalive_secs: d_ka(),
+        keepalive_url: d_ka_url(),
+        overuse_rotate_threshold: d_overuse_thr(),
         verify_ip_field: d_ip_field(),
         verify_country_field: d_country_field(),
         verify_direct_url: d_verify_url(),
