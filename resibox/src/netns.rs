@@ -35,10 +35,10 @@ fn sh(cmd: &str, args: &[&str]) -> Result<String> {
 }
 
 /// Resolve proxy host on the HOST side; we exempt these IPs from redirection.
-pub async fn resolve_proxy_ips(host: &str) -> Result<Vec<String>> {
-    use tokio::net::lookup_host;
-    let addrs = lookup_host((host, 0))
-        .await
+pub fn resolve_proxy_ips(host: &str) -> Result<Vec<String>> {
+    use std::net::ToSocketAddrs;
+    let addrs = (host, 0u16)
+        .to_socket_addrs()
         .with_context(|| format!("resolve proxy host {host}"))?;
     let ips: Vec<String> = addrs
         .map(|a| a.ip().to_string())

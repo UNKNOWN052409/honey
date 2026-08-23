@@ -2,6 +2,15 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct VerifyEndpoint {
+    pub url: String,
+    #[serde(default = "d_ip_field")]
+    pub ip_field: String,
+    #[serde(default = "d_country_field")]
+    pub country_field: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct General {
     #[serde(default = "d_health")]
     pub health_port: u16,
@@ -12,6 +21,9 @@ pub struct General {
     /// Optional extra verifier endpoints; tried in order on failure/empty body.
     #[serde(default)]
     pub verify_urls: Vec<String>,
+    /// Full-featured verifier list: each endpoint carries its own field paths.
+    #[serde(default)]
+    pub verify_endpoints: Vec<VerifyEndpoint>,
     #[serde(default = "d_ip_field")]
     pub verify_ip_field: String,
     #[serde(default = "d_country_field")]
@@ -98,6 +110,7 @@ fn d_general() -> General {
         verify_interval_secs: d_interval(),
         verify_url: d_verify_url(),
         verify_urls: vec![],
+        verify_endpoints: vec![],
         verify_ip_field: d_ip_field(),
         verify_country_field: d_country_field(),
         verify_direct_url: d_verify_url(),

@@ -75,7 +75,8 @@ pub async fn http_get_direct(url: &str, timeout: Duration) -> Result<String> {
     if url.starts_with("https://") {
         bail!("verify_direct_url must be plain http://");
     }
-    let mut s = tokio::time::timeout(timeout, tokio::net::TcpStream::connect((host.as_str(), port)))
+    let addr = crate::proxy::resolve_inline(&host, port)?;
+    let mut s = tokio::time::timeout(timeout, tokio::net::TcpStream::connect(addr))
         .await
         .map_err(|_| anyhow!("timeout direct connect"))??;
     let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: resibox/1.0\r\nConnection: close\r\n\r\n");
@@ -138,11 +139,20 @@ pub async fn verify(
 ) -> VerifyOutcome {
     // Residential gateways are flaky under load: retry transient failures
     // before declaring the endpoint dead.
-    let urls: Vec<String> = {
-        let mut u = vec![g.verify_url.clone()];
-        u.extend(g.verify_urls.iter().cloned());
-        u
-    };
+    // Build endpoint table: explicit [[verify_endpoints]] first, then the
+    // legacy single-url + extras with global field names.
+    let mut eps: Vec<(String, String, String)> = g
+        .verify_endpoints
+        .iter()
+        .map(|e| (e.url.clone(), e.ip_field.clone(), e.country_field.clone()))
+        .collect();
+    if !g.verify_url.is_empty() {
+        eps.push((g.verify_url.clone(), g.verify_ip_field.clone(), g.verify_country_field.clone()));
+    }
+    for u in &g.verify_urls {
+        eps.push((u.clone(), g.verify_ip_field.clone(), g.verify_country_field.clone()));
+    }
+
     let mut parsed: Option<Observation> = None;
     let mut last_err = String::new();
 
@@ -150,14 +160,14 @@ pub async fn verify(
         if attempt > 0 {
             tokio::time::sleep(Duration::from_secs(3)).await;
         }
-        for url in &urls {
+        for (url, ipf, cf) in &eps {
             match http_get_via_proxy(proxy, url, Duration::from_secs(g.verify_timeout_override())).await {
                 Ok(b) => {
                     if b.trim().is_empty() {
                         last_err = format!("empty response from {url}");
                         continue; // endpoint ratelimited us — try next
                     }
-                    match parse_observation(&b, &g.verify_ip_field, &g.verify_country_field) {
+                    match parse_observation(&b, ipf, cf) {
                         Ok(o) => {
                             parsed = Some(o);
                             break 'outer;

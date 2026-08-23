@@ -20,6 +20,16 @@ pub struct ProxyUrl {
     pub pass: Option<String>,
 }
 
+/// Resolve WITHOUT tokio's blocking-pool (this sandbox sometimes refuses
+/// thread creation; std resolution runs inline on the current thread).
+pub fn resolve_inline(host: &str, port: u16) -> std::io::Result<std::net::SocketAddr> {
+    use std::net::ToSocketAddrs;
+    (host, port)
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, format!("no addr for {host}")))
+}
+
 /// Parse socks5:// / http:// proxy URLs.
 pub fn parse_proxy(url: &str) -> Result<ProxyUrl> {
     let (kind, rest) = if let Some(r) = url.strip_prefix("socks5://") {
@@ -101,7 +111,8 @@ pub async fn connect_through(
 }
 
 async fn socks5_connect(p: &ProxyUrl, host: &str, port: u16) -> Result<TcpStream> {
-    let mut s = TcpStream::connect((p.host.as_str(), p.port))
+    let addr = resolve_inline(&p.host, p.port)?;
+    let mut s = TcpStream::connect(addr)
         .await
         .with_context(|| format!("tcp connect to proxy {}:{}", p.host, p.port))?;
     s.set_nodelay(true).ok();
@@ -164,7 +175,8 @@ async fn socks5_connect(p: &ProxyUrl, host: &str, port: u16) -> Result<TcpStream
 }
 
 async fn http_connect(p: &ProxyUrl, host: &str, port: u16) -> Result<TcpStream> {
-    let mut s = TcpStream::connect((p.host.as_str(), p.port))
+    let addr = resolve_inline(&p.host, p.port)?;
+    let mut s = TcpStream::connect(addr)
         .await
         .with_context(|| format!("tcp connect to proxy {}:{}", p.host, p.port))?;
     s.set_nodelay(true).ok();
