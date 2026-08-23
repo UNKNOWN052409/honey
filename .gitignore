@@ -1,28 +1,7 @@
-# Rust
-supervisor/target/
-rust-proxy/target/
-**/*.rs.bk
-
-# Environment
-.env
-
-# System files
-NUL
-cpu.ps1
-
-# Build artifacts
-build.sh
-
-# Large binaries (extracted from Docker — not for git)
-honeygain-binary/
-hg_rootfs.tar
-libs/
-system-libs/
-lib64/
-
-# OS
-Thumbs.db
-.DS_Store
-
-# Nested duplicate clone of this repo (local artifact — do not commit)
-/honey/
+resibox/accounts.txt
+resibox/proxies.txt
+resibox/countries.txt
+*.log
+*.txt
+!resibox/README.md
+!resibox/SCALING.md
