@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use resibox::{config, container, health, verify};
 use std::sync::Arc;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(

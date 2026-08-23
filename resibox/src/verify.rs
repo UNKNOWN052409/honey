@@ -102,16 +102,22 @@ fn split_url(url: &str) -> Result<(String, u16, String)> {
     Ok((host, port, path))
 }
 
+fn json_path<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut cur = v;
+    for part in path.split('.') {
+        cur = cur.get(part)?;
+    }
+    Some(cur)
+}
+
 pub fn parse_observation(body: &str, ip_field: &str, country_field: &str) -> Result<Observation> {
     let v: serde_json::Value =
         serde_json::from_str(body).with_context(|| format!("bad json from verifier: {body:.120}"))?;
-    let ip = v
-        .get(ip_field)
+    let ip = json_path(&v, ip_field)
         .and_then(|x| x.as_str())
         .ok_or_else(|| anyhow!("missing field '{ip_field}' in verifier response"))?
         .to_string();
-    let country = v
-        .get(country_field)
+    let country = json_path(&v, country_field)
         .and_then(|x| x.as_str())
         .map(|s| s.to_string());
     Ok(Observation { ip, country })
@@ -132,33 +138,40 @@ pub async fn verify(
 ) -> VerifyOutcome {
     // Residential gateways are flaky under load: retry transient failures
     // before declaring the endpoint dead.
-    let mut body = None;
+    let urls: Vec<String> = {
+        let mut u = vec![g.verify_url.clone()];
+        u.extend(g.verify_urls.iter().cloned());
+        u
+    };
+    let mut parsed: Option<Observation> = None;
     let mut last_err = String::new();
-    for attempt in 0..3 {
+
+    'outer: for attempt in 0..3 {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_secs(3)).await;
         }
-        match http_get_via_proxy(
-            proxy,
-            &g.verify_url,
-            Duration::from_secs(g.verify_timeout_override()),
-        )
-        .await
-        {
-            Ok(b) => {
-                body = Some(b);
-                break;
+        for url in &urls {
+            match http_get_via_proxy(proxy, url, Duration::from_secs(g.verify_timeout_override())).await {
+                Ok(b) => {
+                    if b.trim().is_empty() {
+                        last_err = format!("empty response from {url}");
+                        continue; // endpoint ratelimited us — try next
+                    }
+                    match parse_observation(&b, &g.verify_ip_field, &g.verify_country_field) {
+                        Ok(o) => {
+                            parsed = Some(o);
+                            break 'outer;
+                        }
+                        Err(e) => last_err = format!("{url}: {e}"),
+                    }
+                }
+                Err(e) => last_err = format!("{url}: {e}"),
             }
-            Err(e) => last_err = format!("{e}"),
         }
     }
-    let body = match body {
-        Some(b) => b,
-        None => return VerifyOutcome::Fail { reason: format!("proxy unreachable/unusable: {last_err}") },
-    };
-    let obs = match parse_observation(&body, &g.verify_ip_field, &g.verify_country_field) {
-        Ok(o) => o,
-        Err(e) => return VerifyOutcome::Fail { reason: format!("verifier parse: {e}") },
+    let obs = match parsed {
+        Some(o) => o,
+        None => return VerifyOutcome::Fail { reason: format!("verifier failed: {last_err}") },
     };
 
     // Leak check FIRST: if we see the host's own IP something is catastrophically wrong.

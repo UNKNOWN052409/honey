@@ -35,6 +35,8 @@ pub struct ContainerState {
     pub rotations: Mutex<u32>,
     pub last_error: Mutex<String>,
     pub enforcement_used: Mutex<String>,
+    pub overuse_hits: Mutex<u32>,
+    pub device_conflict: Mutex<bool>,
 }
 
 struct Procs {
@@ -55,6 +57,8 @@ impl ContainerState {
             rotations: Mutex::new(0),
             last_error: Mutex::new(String::new()),
             enforcement_used: Mutex::new(String::new()),
+            overuse_hits: Mutex::new(0),
+            device_conflict: Mutex::new(false),
         }
     }
 
@@ -178,6 +182,8 @@ pub async fn run_container(cs: Arc<ContainerState>, g: Arc<General>, baseline: O
         kill_apps(&mut procs).await;
         match verify(&proxy, &ep.policy, &baseline, &g).await {
             VerifyOutcome::Pass { observed } => {
+                *cs.overuse_hits.lock().unwrap() = 0;
+                *cs.device_conflict.lock().unwrap() = false;
                 *cs.observed_ip.lock().unwrap() = Some(observed.ip.clone());
                 *cs.observed_country.lock().unwrap() = observed.country.clone();
                 *cs.last_error.lock().unwrap() = String::new();
@@ -221,6 +227,38 @@ pub async fn run_container(cs: Arc<ContainerState>, g: Arc<General>, baseline: O
         // ---- WATCHDOG ------------------------------------------------------
         loop {
             sleep_backoff(g.verify_interval_secs).await;
+
+            // DEVICE CONFLICT: old session still registered server-side.
+            // Rotate to a persisted-but-fresh device id and recycle.
+            if *cs.device_conflict.lock().unwrap() {
+                let new_id = next_device_id(&cs.cfg.name);
+                tracing::warn!(container = %cs.cfg.name, %new_id,
+                               "rotating device id after conflict");
+                *cs.overuse_hits.lock().unwrap() = 0;
+                teardown(&mut procs).await;
+                // brief cool-off lets the server release the old session
+                tokio::time::sleep(Duration::from_secs(20)).await;
+                continue 'outer;
+            }
+
+            // PROVIDER SIGNAL: too many "Network Overused" hits => this
+            // sticky endpoint has gone sour. Rotate to a FRESH session IP
+            // (authorized by provider behavior), then FULL preflight again.
+            if *cs.overuse_hits.lock().unwrap() >= 5 {
+                if let Some(new_url) = rotate_sticky(&ep.url) {
+                    tracing::warn!(container = %cs.cfg.name,
+                                   "OVERUSE ROTATION: switching to fresh sticky session");
+                    endpoints.lock().unwrap().insert(0, Endpoint {
+                        url: new_url,
+                        policy: ep.policy.clone(),
+                    });
+                    *cs.overuse_hits.lock().unwrap() = 0;
+                    *cs.rotations.lock().unwrap() += 1;
+                    teardown(&mut procs).await;
+                    cs.set_sync(State::Rotating);
+                    continue 'outer;
+                }
+            }
 
             // If both children died on their own, restart via outer preflight.
             let hg_alive = procs.hg.as_mut().map(|c| {
@@ -346,6 +384,50 @@ async fn build_jail(cs: &Arc<ContainerState>, proxy: &ProxyUrl) -> Result<NetNs>
     NetNs::create(&cs.cfg.name, idx, &proxy.host, proxy.port, &ips).await
 }
 
+fn device_state_path(name: &str) -> std::path::PathBuf {
+    let dir = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    std::path::Path::new(&dir).join(".resibox-devices")
+}
+
+/// Stable per-container device suffix, persisted across restarts.
+/// Regenerated ONLY when the provider reports a device-name conflict.
+fn current_device_suffix(name: &str) -> String {
+    let dir = device_state_path(name);
+    let _ = std::fs::create_dir_all(&dir);
+    let f = dir.join(format!("{name}.id"));
+    if let Ok(id) = std::fs::read_to_string(&f) {
+        let id = id.trim().to_string();
+        if !id.is_empty() {
+            return id;
+        }
+    }
+    next_device_id(name)
+}
+
+fn next_device_id(name: &str) -> String {
+    let id = crate::config::nanoid6();
+    let dir = device_state_path(name);
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(dir.join(format!("{name}.id")), &id);
+    id
+}
+
+/// Swap the sticky-session id inside a proxy URL: host stays, exit IP changes.
+/// e.g. "...res-gb-sid-483920164:..." -> "...res-gb-sid-<fresh-random>:..."
+fn rotate_sticky(url: &str) -> Option<String> {
+    let marker = "sid-";
+    let pos = url.find(marker)?;
+    let start = pos + marker.len();
+    let rest = &url[start..];
+    let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits < 4 {
+        return None; // not a sticky-session style URL; no authorized rotation
+    }
+    use rand::Rng;
+    let fresh: u32 = rand::thread_rng().gen_range(100000000..999999999u32);
+    Some(format!("{}{}{}", &url[..start], fresh, &url[start + digits..]))
+}
+
 fn cs_index(name: &str) -> u8 {
     // stable small index from name for subnet allocation
     let h = name.bytes().fold(7u8, |a, b| a.wrapping_mul(31).wrapping_add(b));
@@ -411,23 +493,111 @@ async fn spawn_apps(
         c
     };
 
-    let hg_argv = cs.cfg.hg_argv();
-    let pb_argv = cs.cfg.pawns_argv();
+    // Ensure unique-per-container, restart-stable device identities.
+    let mut hg_argv = cs.cfg.hg_argv();
+    apply_device_identity(cs, &mut hg_argv, true);
+    let mut pb_argv = cs.cfg.pawns_argv();
+    apply_device_identity(cs, &mut pb_argv, false);
 
-    let hg = if !hg_argv.is_empty() {
+    let mut hg = if !hg_argv.is_empty() {
         Some(wrap(&hg_argv).spawn().context("spawn honeygain")?)
     } else {
         None
     };
-    let pb = if !pb_argv.is_empty() {
+    let mut pb = if !pb_argv.is_empty() {
         Some(wrap(&pb_argv).spawn().context("spawn pawns-cli")?)
     } else {
         None
     };
+
+    // Drain app output: log every line + watch for provider overuse signals.
+    if let Some(ch) = hg.as_mut() {
+        if let Some(out) = ch.stdout.take() {
+            tokio::spawn(scan_output(cs.clone(), "honeygain", out));
+        }
+        if let Some(err) = ch.stderr.take() {
+            tokio::spawn(scan_output(cs.clone(), "honeygain-stderr", err));
+        }
+    }
+    if let Some(ch) = pb.as_mut() {
+        if let Some(out) = ch.stdout.take() {
+            tokio::spawn(scan_output(cs.clone(), "pawns", out));
+        }
+        if let Some(err) = ch.stderr.take() {
+            tokio::spawn(scan_output(cs.clone(), "pawns-stderr", err));
+        }
+    }
     Ok((hg, pb))
 }
 
+/// Stream an app's output into our log; count provider overuse signals.
+async fn scan_output(cs: Arc<ContainerState>, tag: &str, stream: impl tokio::io::AsyncRead + Unpin) {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let reader = BufReader::new(stream);
+    let mut lines = reader.lines();
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                tracing::info!(container = %cs.cfg.name, app = tag, "{}", line);
+                let lower = line.to_lowercase();
+                if lower.contains("choose a different device name") {
+                    *cs.device_conflict.lock().unwrap() = true;
+                    tracing::warn!(container = %cs.cfg.name,
+                                   "DEVICE CONFLICT: server still holds old session; will rotate device id");
+                }
+                if lower.contains("overused") {
+                    *cs.overuse_hits.lock().unwrap() += 1;
+                    tracing::warn!(container = %cs.cfg.name,
+                                   hits = *cs.overuse_hits.lock().unwrap(),
+                                   "PROVIDER SIGNAL: network overused");
+                }
+                if lower.contains("connected") && lower.contains("running") {
+                    *cs.overuse_hits.lock().unwrap() = 0;
+                }
+            }
+            _ => break,
+        }
+    }
+}
+
 fn all_proxy_env(cs: &Arc<ContainerState>) -> String { cs.cfg.proxy.clone() }
+
+/// Rewrite -device/-device-name args to include the container's stable id.
+/// If a conflict was flagged, force a fresh id first.
+fn apply_device_identity(cs: &Arc<ContainerState>, argv: &mut [String], honeygain: bool) {
+    let base = if honeygain { &cs.cfg.honeygain_device } else { &cs.cfg.pawns_device_name };
+    let base = if base.is_empty() {
+        format!("{}-{}", cs.cfg.name, if honeygain { "hg" } else { "pb" })
+    } else {
+        base.clone()
+    };
+    if *cs.device_conflict.lock().unwrap() {
+        let fresh = next_device_id(&cs.cfg.name);
+        let full = format!("{base}-{fresh}");
+        rewrite(argv, &full);
+        return;
+    }
+    let id = current_device_suffix(&cs.cfg.name);
+    let full = format!("{base}-{id}");
+    rewrite(argv, &full);
+}
+
+fn rewrite(argv: &mut [String], dev: &str) {
+    let mut i = 0;
+    while i < argv.len() {
+        let a = &argv[i];
+        if a == "-device" || a == "-device-name" {
+            if let Some(slot) = argv.get_mut(i + 1) {
+                *slot = dev.to_string();
+            }
+        } else if let Some(rest) = a.strip_prefix("-device=") {
+            argv[i] = format!("-device={dev}");
+        } else if let Some(rest) = a.strip_prefix("-device-name=") {
+            argv[i] = format!("-device-name={dev}");
+        }
+        i += 1;
+    }
+}
 
 async fn kill_apps(procs: &mut Procs) {
     for c in [&mut procs.hg, &mut procs.pawns] {

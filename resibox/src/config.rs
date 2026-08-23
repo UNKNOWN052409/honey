@@ -9,6 +9,9 @@ pub struct General {
     pub verify_interval_secs: u64,
     #[serde(default = "d_verify_url")]
     pub verify_url: String,
+    /// Optional extra verifier endpoints; tried in order on failure/empty body.
+    #[serde(default)]
+    pub verify_urls: Vec<String>,
     #[serde(default = "d_ip_field")]
     pub verify_ip_field: String,
     #[serde(default = "d_country_field")]
@@ -94,6 +97,7 @@ fn d_general() -> General {
         health_port: d_health(),
         verify_interval_secs: d_interval(),
         verify_url: d_verify_url(),
+        verify_urls: vec![],
         verify_ip_field: d_ip_field(),
         verify_country_field: d_country_field(),
         verify_direct_url: d_verify_url(),
